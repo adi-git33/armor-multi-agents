@@ -1,20 +1,13 @@
 import { Box, Paper, Typography } from "@mui/material";
 import { styled } from "@mui/material/styles";
 
-export const SegmentGrid = styled(Box)(({ theme }) => ({
+export const SegmentGrid = styled(Box)({
   display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
   gap: "12px",
   padding: "14px 16px 0",
-  [theme.breakpoints.down("lg")]: {
-    gridTemplateColumns: "repeat(2, 1fr)",
-  },
-  [theme.breakpoints.down("sm")]: {
-    gridTemplateColumns: "1fr",
-    padding: "10px 10px 0",
-    gap: "10px",
-  },
-}));
+  minWidth: 0,
+});
 
 export const SegmentCard = styled(Paper, {
   shouldForwardProp: (prop) => prop !== "activeborder" && prop !== "activeglow",

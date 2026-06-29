@@ -62,16 +62,3 @@ button {
   height: 8px;
   flex-shrink: 0;
 }
-
-@media (max-width: 1200px) {
-  .dashboard-main {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 900px) {
-  .dashboard-main {
-    padding: 0 10px;
-    gap: 10px;
-  }
-}

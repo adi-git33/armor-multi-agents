@@ -41,28 +41,30 @@ export const StageViewport = styled(Box)({
   flex: 1,
   minHeight: 0,
   width: "100%",
+  overflow: "hidden",
   display: "flex",
   justifyContent: "center",
   alignItems: "flex-start",
 });
 
 export const StageScaleFrame = styled(Box, {
-  shouldForwardProp: (prop) => prop !== "yscale",
-})(({ yscale }) => ({
-  width: 1180,
+  shouldForwardProp: (prop) => prop !== "yscale" && prop !== "xscale",
+})(({ yscale, xscale }) => ({
+  width: 1180 * xscale,
   height: 700 * yscale,
   position: "relative",
   flexShrink: 0,
+  overflow: "hidden",
 }));
 
 export const StageSurface = styled(Box, {
-  shouldForwardProp: (prop) => prop !== "yscale",
-})(({ theme, yscale }) => ({
+  shouldForwardProp: (prop) => prop !== "yscale" && prop !== "xscale",
+})(({ theme, yscale, xscale }) => ({
   position: "relative",
   width: 1180,
   height: 700,
   flexShrink: 0,
-  transform: `scale(1, ${yscale})`,
+  transform: `scale(${xscale}, ${yscale})`,
   transformOrigin: "top left",
   backgroundColor: theme.customDashboard.stageBackground,
   backgroundImage: `radial-gradient(circle, ${theme.customDashboard.stageGridDot} 1px, transparent 1px)`,

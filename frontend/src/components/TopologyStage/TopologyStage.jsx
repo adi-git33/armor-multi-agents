@@ -54,17 +54,20 @@ function TopologyStage({
 }) {
   const viewportRef = useRef(null);
   const [stageYScale, setStageYScale] = useState(1);
+  const [stageXScale, setStageXScale] = useState(1);
 
   useEffect(() => {
     const BASE_HEIGHT = 700;
-    const MIN_SCALE = 0.6;
+    const BASE_WIDTH = 1180;
+    const MIN_SCALE = 0.5;
 
     const recalc = () => {
       if (!viewportRef.current) return;
       const rect = viewportRef.current.getBoundingClientRect();
       const heightScale = rect.height / BASE_HEIGHT;
-      const nextScale = Math.min(1, heightScale);
-      setStageYScale(Math.max(MIN_SCALE, nextScale));
+      const widthScale = rect.width / BASE_WIDTH;
+      setStageYScale(Math.max(MIN_SCALE, Math.min(1, heightScale)));
+      setStageXScale(Math.max(MIN_SCALE, Math.min(1, widthScale)));
     };
 
     const observer = new ResizeObserver(recalc);
@@ -102,8 +105,8 @@ function TopologyStage({
       </StageHeader>
 
       <StageViewport ref={viewportRef}>
-      <StageScaleFrame yscale={stageYScale}>
-      <StageSurface yscale={stageYScale}>
+      <StageScaleFrame yscale={stageYScale} xscale={stageXScale}>
+      <StageSurface yscale={stageYScale} xscale={stageXScale}>
         <LayerSvg width="1180" height="700" viewBox="0 0 1180 700">
           {links.map((l, i) => (
             <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.color} strokeWidth={l.w} strokeLinecap="round" />

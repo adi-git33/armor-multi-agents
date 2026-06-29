@@ -1,7 +1,7 @@
 # armor-multi-agents
 
 ## creat .venv
-py -3.11 -m venv .venv
+py -3.11 -m venv .venv OR py -3.12 -m venv .venv 2>&1
 .venv\Scripts\activate
 
 ## upgrade pip
