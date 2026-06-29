@@ -1,0 +1,77 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #eaedf1;
+  font-family: "IBM Plex Mono", monospace;
+  color: #3a4452;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d2d8df;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dashboard-app {
+  height: 100vh;
+  margin: 0 auto;
+  background: #eaedf1;
+  color: #3a4452;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.dashboard-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  gap: 12px;
+  padding: 0 16px;
+  align-items: stretch;
+}
+
+.dashboard-spacer {
+  height: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1200px) {
+  .dashboard-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboard-main {
+    padding: 0 10px;
+    gap: 10px;
+  }
+}

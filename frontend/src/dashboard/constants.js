@@ -1,0 +1,55 @@
+export const C = {
+  idle: "#b3bcc6",
+  mon: "#4a9e7f",
+  active: "#4577b5",
+  alert: "#d9a23f",
+  down: "#cf6b5e",
+  green: "#4a9e7f",
+  red: "#cf6b5e",
+  amber: "#d9a23f",
+  purple: "#7b6fc4",
+  teal: "#3fa3a8",
+  blue: "#4577b5",
+};
+
+export const POS = {
+  attacker: { x: 140, y: 120 },
+  legit: { x: 300, y: 120 },
+  edge: { x: 220, y: 330 },
+  core: { x: 430, y: 330 },
+  tma: { x: 430, y: 500 },
+  A: { x: 770, y: 205 },
+  B: { x: 1010, y: 205 },
+  C: { x: 770, y: 335 },
+  D: { x: 1010, y: 335 },
+  E: { x: 770, y: 465 },
+  aca1: { x: 226, y: 605 },
+  tia1: { x: 486, y: 605 },
+  rca1: { x: 716, y: 605 },
+  raa1: { x: 966, y: 605 },
+};
+
+export const HOSTLEFT = { A: 664, B: 904, C: 664, D: 904, E: 664 };
+export const HOSTTOP = { A: 172, B: 172, C: 302, D: 302, E: 432 };
+
+export const SCENARIOS = [
+  { id: "calm", label: "Calm Baseline" },
+  { id: "ddos", label: "DDoS Attack" },
+  { id: "scan", label: "Port Scan" },
+];
+
+export const BUS_AGENTS = [
+  { id: "ACA:1", code: "ACA-1", role: "Anomaly Classifier", accent: C.red },
+  { id: "TIA:1", code: "TIA-1", role: "Threat Intelligence", accent: C.teal },
+  { id: "RCA:1", code: "RCA-1", role: "Response Coordinator", accent: C.blue },
+  { id: "RAA:1", code: "RAA-1", role: "Resource Allocator", accent: C.purple },
+];
+
+export const LEGEND = [
+  { color: C.green, label: "NORMAL" },
+  { color: C.amber, label: "ANOMALY" },
+  { color: C.red, label: "CONFIRMED THREAT" },
+  { color: "#8b5cf6", label: "QUARANTINED" },
+  { color: C.blue, label: "ACTIVE AGENT" },
+  { color: C.idle, label: "IDLE AGENT" },
+];
