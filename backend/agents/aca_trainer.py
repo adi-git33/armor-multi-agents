@@ -2,7 +2,7 @@
 ACA Trainer
 ===========
 Generates realistic labelled training data across varied attack scenarios,
-trains a DecisionTreeClassifier, and saves the model to disk.
+trains a RandomForestClassifier, and saves the model to disk.
 
 Scenarios
 ---------
@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
@@ -272,7 +272,7 @@ async def _run_scenario(
 # Main entry point
 # ──────────────────────────────────────────────────────────────────────
 
-async def generate_and_train(n_seeds: int = 6) -> None:
+async def generate_and_train(n_seeds: int = 8) -> None:
     print("=" * 65)
     print("  ACA Trainer  |  generating synthetic training data")
     print(f"  Scenarios: {len(SCENARIOS)}   Seeds per scenario: {n_seeds}")
@@ -300,12 +300,36 @@ async def generate_and_train(n_seeds: int = 6) -> None:
     print(f"    PORT_SCAN = {sum(y == LABEL_PORT_SCAN)}")
     print(f"    Total     = {len(y)}")
 
+    # ── Feature jitter ────────────────────────────────────────────────
+    # Add Gaussian noise scaled to 10% of each feature's std.
+    # This prevents leaf-node purity and forces the model to learn
+    # probabilistic boundaries rather than memorising exact simulator values.
+    # Feature 0 (anomaly_type_enc) is binary — skip it.
+    JITTER_SCALE = 0.10
+    jitter_rng   = np.random.default_rng(42)
+    noise_scale  = X.std(axis=0) * JITTER_SCALE
+    noise_scale[0] = 0.0                          # keep binary feature exact
+    noise   = jitter_rng.normal(0, noise_scale, size=X.shape)
+    X_aug   = X + noise
+    X_aug[:, 0] = X[:, 0]                         # restore binary feature
+    print(f"\n  Feature jitter applied (scale={JITTER_SCALE} x feature std):")
+    for i, (name, ns) in enumerate(zip(FEATURE_NAMES, noise_scale)):
+        print(f"    {name:22s}  noise_std={ns:.4f}")
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y,
+        X_aug, y, test_size=0.2, random_state=42, stratify=y,
     )
 
-    clf = DecisionTreeClassifier(max_depth=5, random_state=42,
-                                 class_weight="balanced")
+    # ── Model ─────────────────────────────────────────────────────────
+    # RandomForest averages votes across 100 trees so predict_proba
+    # reflects genuine uncertainty — a borderline sample gets 0.65, not 1.0.
+    clf = RandomForestClassifier(
+        n_estimators  = 100,
+        max_depth     = 5,
+        random_state  = 42,
+        class_weight  = "balanced",
+        n_jobs        = -1,
+    )
     clf.fit(X_train, y_train)
 
     print("\n  Classification report on held-out 20%:")
@@ -314,11 +338,23 @@ async def generate_and_train(n_seeds: int = 6) -> None:
         target_names=LABEL_NAMES, zero_division=0,
     ))
 
-    # Print the top splitting features
+    # Confidence distribution on the test set
+    probas      = clf.predict_proba(X_test)
+    max_probas  = probas.max(axis=1)
+    print("  Confidence distribution on test set (predict_proba max):")
+    print(f"    mean={max_probas.mean():.3f}  "
+          f"min={max_probas.min():.3f}  "
+          f"max={max_probas.max():.3f}  "
+          f"std={max_probas.std():.3f}")
+    for threshold in (1.0, 0.95, 0.90, 0.80):
+        pct = (max_probas >= threshold).mean() * 100
+        print(f"    >= {threshold:.2f} : {pct:5.1f}% of predictions")
+
+    # Feature importances (averaged across trees)
     importances = clf.feature_importances_
     ranked = sorted(zip(FEATURE_NAMES, importances),
                     key=lambda x: x[1], reverse=True)
-    print("  Feature importances (top 5):")
+    print("\n  Feature importances (top 5, mean decrease in impurity):")
     for name, imp in ranked[:5]:
         bar = "#" * int(imp * 40)
         print(f"    {name:22s}  {imp:.3f}  {bar}")
