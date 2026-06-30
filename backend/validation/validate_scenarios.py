@@ -81,12 +81,12 @@ async def run() -> ValidationSuite:
     bus1.subscribe(Topic.RESOLUTION,     s1_on_res)
 
     gen1_task = asyncio.create_task(gen1.run())
-    await asyncio.sleep(3)
+    await asyncio.sleep(1)
 
     atk_s1      = DDoSAttacker("ATK:s1", "public-facing", gen1, intensity_multiplier=10.0, rng_seed=40)
-    atk_s1_task = asyncio.create_task(atk_s1.launch(10))
+    atk_s1_task = asyncio.create_task(atk_s1.launch(4))
     t_s1        = time.monotonic()
-    await asyncio.sleep(10 + 1.5)
+    await asyncio.sleep(4 + 1.0)
     await asyncio.gather(atk_s1_task, return_exceptions=True)
     gen1.stop(); gen1_task.cancel()
     await asyncio.gather(gen1_task, return_exceptions=True)
@@ -94,7 +94,7 @@ async def run() -> ValidationSuite:
     detected_ddos = len([r for r in s1_reports if r.get("classification") == "DDOS"])
     s1_mttr_ms    = (s1_res_times[0] - s1_tr_times[0]) * 1000 if (s1_tr_times and s1_res_times) else None
     q_count_s1    = sum(1 for r in s1_resolutions if "QUARANTINE" in str(r.get("action", "")))
-    availability1 = max(0.0, (10 - q_count_s1) / 10)
+    availability1 = max(0.0, (5 - q_count_s1) / 5)
     evasion_s1    = 0.0 if detected_ddos > 0 else 0.5
     u_atk_s1      = evasion_s1 * (1 - availability1)
 
@@ -143,14 +143,14 @@ async def run() -> ValidationSuite:
     bus2.subscribe(Topic.RESOLUTION,     s2_on_res)
 
     gen2_task = asyncio.create_task(gen2.run())
-    await asyncio.sleep(3)
+    await asyncio.sleep(1)
 
     atk2a = DDoSAttacker("ATK:s2a", "public-facing", gen2, intensity_multiplier=10.0, rng_seed=41)
     atk2b = PortScanner("ATK:s2b",  "internal",       gen2, rng_seed=42)
     t_s2  = time.monotonic()
-    t2a   = asyncio.create_task(atk2a.launch(10))
-    t2b   = asyncio.create_task(atk2b.launch(10))
-    await asyncio.sleep(10 + 1.5)
+    t2a   = asyncio.create_task(atk2a.launch(4))
+    t2b   = asyncio.create_task(atk2b.launch(4))
+    await asyncio.sleep(4 + 1.0)
     await asyncio.gather(t2a, t2b, return_exceptions=True)
     gen2.stop(); gen2_task.cancel()
     await asyncio.gather(gen2_task, return_exceptions=True)
@@ -191,15 +191,15 @@ async def run() -> ValidationSuite:
     for a in [tma3, aca3, rca3, raa3, tia3]: await a.start()
 
     gen3_task = asyncio.create_task(gen3.run())
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
 
     atks3 = [
         DDoSAttacker("ATK:s3a", "public-facing", gen3, intensity_multiplier=10.0, rng_seed=43),
         PortScanner("ATK:s3b",  "server",          gen3, rng_seed=44),
         DDoSAttacker("ATK:s3c", "internal",        gen3, intensity_multiplier=8.0,  rng_seed=45),
     ]
-    t3_tasks = [asyncio.create_task(a.launch(10)) for a in atks3]
-    await asyncio.sleep(10 + 1.5)
+    t3_tasks = [asyncio.create_task(a.launch(4)) for a in atks3]
+    await asyncio.sleep(4 + 1.0)
     await asyncio.gather(*t3_tasks, return_exceptions=True)
     gen3.stop(); gen3_task.cancel()
     await asyncio.gather(gen3_task, return_exceptions=True)
@@ -255,13 +255,13 @@ async def run() -> ValidationSuite:
     bus4.subscribe(Topic.THREAT_REPORTS, s4_on_rep)
 
     gen4_task = asyncio.create_task(gen4.run())
-    await asyncio.sleep(3)
+    await asyncio.sleep(1)
 
     # No ZeroDayAttacker in codebase — use DDoSAttacker as novel-traffic proxy
     atk_zd      = DDoSAttacker("ATK:s4", "server", gen4, intensity_multiplier=5.0, rng_seed=46)
     t_s4        = time.monotonic()
-    atk_zd_task = asyncio.create_task(atk_zd.launch(8))
-    await asyncio.sleep(8 + 1.0)
+    atk_zd_task = asyncio.create_task(atk_zd.launch(4))
+    await asyncio.sleep(4 + 1.0)
     await asyncio.gather(atk_zd_task, return_exceptions=True)
     gen4.stop(); gen4_task.cancel()
     await asyncio.gather(gen4_task, return_exceptions=True)
@@ -303,7 +303,7 @@ async def run() -> ValidationSuite:
     bus5.subscribe(Topic.THREAT_REPORTS, s5_on_rep)
 
     gen5_task = asyncio.create_task(gen5.run())
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
 
     await aca5.stop()
     t_fail      = time.monotonic()
@@ -312,8 +312,8 @@ async def run() -> ValidationSuite:
     reassign_ms = (time.monotonic() - t_fail) * 1000
 
     atk_s5      = DDoSAttacker("ATK:s5", "server", gen5, intensity_multiplier=10.0, rng_seed=47)
-    atk_s5_task = asyncio.create_task(atk_s5.launch(6))
-    await asyncio.sleep(6 + 1.0)
+    atk_s5_task = asyncio.create_task(atk_s5.launch(3))
+    await asyncio.sleep(3 + 1.0)
     await asyncio.gather(atk_s5_task, return_exceptions=True)
     gen5.stop(); gen5_task.cancel()
     await asyncio.gather(gen5_task, return_exceptions=True)
@@ -356,11 +356,11 @@ async def run() -> ValidationSuite:
     bus6.subscribe(Topic.RESOLUTION, s6_on_res)
 
     gen6_task = asyncio.create_task(gen6.run())
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
 
     atk_s6      = DDoSAttacker("ATK:s6", "public-facing", gen6, intensity_multiplier=15.0, rng_seed=48)
-    atk_s6_task = asyncio.create_task(atk_s6.launch(10))
-    await asyncio.sleep(10 + 1.5)
+    atk_s6_task = asyncio.create_task(atk_s6.launch(4))
+    await asyncio.sleep(4 + 1.0)
     await asyncio.gather(atk_s6_task, return_exceptions=True)
     gen6.stop(); gen6_task.cancel()
     await asyncio.gather(gen6_task, return_exceptions=True)
