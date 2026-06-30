@@ -61,12 +61,9 @@ async def run() -> ValidationSuite:
     alert_times: dict[str, float]  = {}
     report_times: dict[str, float] = {}
 
-    original_on_alert = aca1._on_alert
     async def timed_on_alert(msg):
         aid = msg.content.get("alert_id", id(msg))
         alert_times[aid] = time.monotonic()
-        await original_on_alert(msg)
-    bus1.unsubscribe(Topic.ALERTS, original_on_alert)
     bus1.subscribe(Topic.ALERTS, timed_on_alert)
 
     async def on_report(msg):

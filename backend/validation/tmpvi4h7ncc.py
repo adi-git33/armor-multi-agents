@@ -31,7 +31,13 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _BACK = _HERE.parent
-sys.path.insert(0, str(_BACK))
+# Insert backend/ first so all agent/simulation imports resolve
+if str(_BACK) not in sys.path:
+    sys.path.insert(0, str(_BACK))
+# Insert validation/ so standalone `python validate_tma.py` finds helpers
+print(f"[DEBUG] _HERE={_HERE}, in_path={str(_HERE) in sys.path}")
+sys.path.insert(0, str(_HERE))
+print(f"[DEBUG] after insert: {sys.path[:4]}")
 
 from simulation.clock    import SimClock
 from simulation.network  import NetworkTopology
@@ -41,20 +47,11 @@ from agents.tma  import TrafficMonitorAgent, ANOMALY_THRESHOLD
 from bus.message_bus import MessageBus
 from core.messages   import Topic
 
-# Load helpers directly by file path — works both standalone and as a package submodule
-import importlib.util as _ilu, sys as _sys
-_h_path = str(_HERE / "helpers.py")
-_h_name = "validation.helpers"
-if _h_name not in _sys.modules:
-    _h_spec = _ilu.spec_from_file_location(_h_name, _h_path)
-    _h_mod  = _ilu.module_from_spec(_h_spec)
-    _sys.modules[_h_name] = _h_mod
-    _h_spec.loader.exec_module(_h_mod)
-else:
-    _h_mod = _sys.modules[_h_name]
-ValidationSuite = _h_mod.ValidationSuite
-section         = _h_mod.section
-del _ilu, _h_path, _h_name, _h_mod
+# Import helpers via package path (works both standalone and as validation.validate_tma)
+try:
+    from validation.helpers import ValidationSuite, section
+except ImportError:
+    from helpers import ValidationSuite, section
 
 # ── thresholds from SRS §7.3 / FR-01..04 ─────────────────────────────
 REQUIRED_SAMPLE_RATE   = 10          # Hz  (FR-01)
@@ -300,3 +297,4 @@ async def run() -> ValidationSuite:
 
 if __name__ == "__main__":
     asyncio.run(run())
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
