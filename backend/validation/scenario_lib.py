@@ -235,6 +235,7 @@ async def run_scenario_2(
         availability=1.0 if simultaneous else 0.5, sw=sw, u_atk=evasion,
         extra={
             "coalition_formed": coalition_formed, "coalition_ms": coalition_ms,
+            "coalition_proposals": len(coalitions),
             "segments_responded": segs_responded, "simultaneous": simultaneous,
             "evasion": evasion,
         },
@@ -263,6 +264,12 @@ async def run_scenario_3(
         await _peer_accept_voter(bus)
     for a in agents:
         await a.start()
+
+    resolutions: list[dict] = []
+
+    async def on_res(msg): resolutions.append(msg.content)
+
+    bus.subscribe(Topic.RESOLUTION, on_res)
 
     gen_task = asyncio.create_task(gen.run())
     await asyncio.sleep(1)
@@ -294,6 +301,8 @@ async def run_scenario_3(
         overhead = 0.05
 
     sw = _sw(0.90, 0.90, 0.90, max(0.0, 1.0 - overhead), 0.85)
+    _S3_ATTACKED = {"public-facing", "server", "internal"}
+    segs_resolved = {r.get("segment") for r in resolutions}
 
     return ScenarioResult(
         detected=len(all_grants) + len(all_denials), mttr_ms=None,
@@ -302,6 +311,7 @@ async def run_scenario_3(
             "grants": len(all_grants), "denials": len(all_denials),
             "granted_bids": granted_bids, "denied_bids": denied_bids,
             "priority_result": priority_result, "overhead": overhead,
+            "segments_resolved": segs_resolved, "attacked_segments": _S3_ATTACKED,
         },
     )
 
