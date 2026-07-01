@@ -3,7 +3,7 @@ validate_system.py — System-Level Validation
 =============================================
   FR-29  Detection Rate (DR) ≥ 90% across all attack types
   FR-30  MTTR_Response < 1000 ms for all Confirmed Threats (severity ≥ 0.7)
-  FR-31  System availability > 99% during all simulated attack scenarios
+  FR-31  System availability > 99% (300 s TMA→ACA exposure-window test, §V-SYS-01)
   FR-32  All inter-agent messages follow structured schema; malformed messages rejected
   FR-33  System supports ≥ 5 simultaneous active incidents without degradation
   FR-34  Agent failure: remaining agents take over within 2 seconds
@@ -34,6 +34,10 @@ from agents.tia  import ThreatIntelligenceAgent
 from bus.message_bus import MessageBus
 from core.messages   import Topic, Performative, Message
 from helpers import ValidationSuite, section
+from system_availability import (
+    TOTAL_TIME,
+    run_system_availability_test,
+)
 
 MIN_DR           = 0.90
 MAX_FPR          = 0.08
@@ -73,17 +77,14 @@ async def run() -> ValidationSuite:
     for a in agents.values():
         await a.start()
 
-    alerts:      list[dict] = []
-    reports:     list[dict] = []
-    resolutions: list[dict] = []
+    alerts:  list[dict] = []
+    reports: list[dict] = []
 
     async def on_alert(msg):  alerts.append(msg.content)
     async def on_report(msg): reports.append(msg.content)
-    async def on_res(msg):    resolutions.append(msg.content)
 
     bus.subscribe(Topic.ALERTS,         on_alert)
     bus.subscribe(Topic.THREAT_REPORTS,  on_report)
-    bus.subscribe(Topic.RESOLUTION,      on_res)
 
     gen_task = asyncio.create_task(gen.run())
     await asyncio.sleep(3)  # baseline
@@ -152,16 +153,20 @@ async def run() -> ValidationSuite:
                     observed=f"tr={len(tr_times)} res={len(res_times)}",
                     expected=f"< {MAX_MTTR_MS} ms")
 
-    # ── FR-31: Availability > 99% ─────────────────────────────────────
+    # ── FR-31: Availability > 99% (V-SYS-01 methodology) ───────────────
     section("FR-31  System availability > 99% during attacks")
-    quarantine_res = [r for r in resolutions if "QUARANTINE" in str(r.get("action", ""))]
-    disruption     = min(len(quarantine_res) * 1.0, float(ATTACK_SEC))
-    availability   = (float(ATTACK_SEC) - disruption) / float(ATTACK_SEC)
+    print(f"  Running {TOTAL_TIME:.0f} s TMA→ACA exposure-window test (~5 min) …")
+    avail_result = await run_system_availability_test()
+    availability = avail_result.availability
     suite.check("FR-31",
-                f"Availability > {MIN_AVAILABILITY*100:.0f}% during {ATTACK_SEC}s attack",
-                availability > MIN_AVAILABILITY,
-                observed=f"{availability*100:.2f}% ({len(quarantine_res)} quarantine events)",
-                expected=f"> {MIN_AVAILABILITY*100:.0f}%")
+                f"Availability > {MIN_AVAILABILITY*100:.0f}% "
+                f"(detection-latency over {TOTAL_TIME:.0f} s, 5 attacks)",
+                avail_result.passed,
+                observed=(f"{availability*100:.3f}% "
+                          f"({avail_result.detected_count}/5 detected, "
+                          f"{avail_result.t_disrupted:.2f}s disrupted)"),
+                expected=f"> {MIN_AVAILABILITY*100:.0f}%",
+                note="Pipeline: TrafficGenerator → TMA → ACA (§V-SYS-01)")
 
     # ── FR-32: Message schema validation ─────────────────────────────
     section("FR-32  Structured schema; malformed messages rejected")
@@ -346,7 +351,7 @@ async def run() -> ValidationSuite:
                         "passed": mttr_ms is not None and mttr_ms < MAX_MTTR_MS,
                         "label": "MTTR Response", "lower_is_better": True},
             "availability": {"value": availability, "target": MIN_AVAILABILITY,
-                             "passed": availability > MIN_AVAILABILITY,
+                             "passed": avail_result.passed,
                              "label": "System Availability"},
         },
         "resource": {
