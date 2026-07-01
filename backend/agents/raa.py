@@ -54,12 +54,18 @@ logger = logging.getLogger(__name__)
 RESOURCE_CAPACITY: dict[str, int] = {
     "FIREWALL":   3,
     "QUARANTINE": 2,
+    "THROTTLE":   10,        # cheap/low-disruption — deliberately generous
+                             # so THROTTLE requests essentially always grant
+                             # and the auction stays focused on genuinely
+                             # scarce resources (FIREWALL/QUARANTINE).
     "LOG":        999_999,   # effectively unlimited
 }
 
 RESOURCE_MAP: dict[str, str] = {
     "BLOCK_SOURCE_IP":    "FIREWALL",
     "QUARANTINE_SEGMENT": "QUARANTINE",
+    "THROTTLE_SEGMENT":   "THROTTLE",
+    "THROTTLE_SOURCE_IP": "THROTTLE",
     "LOG_ONLY":           "LOG",
 }
 
@@ -83,8 +89,12 @@ class Allocation:
 
 class ResourceAllocatorAgent(BaseAgent):
 
-    def __init__(self, agent_id: str, bus: MessageBus) -> None:
+    def __init__(self, agent_id: str, bus: MessageBus, naive_auction: bool = False) -> None:
         super().__init__(agent_id, bus)
+
+        # Baseline/ablation flag (BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §4.2).
+        # Defaults False → zero behavior change vs. pre-existing code.
+        self.naive_auction = naive_auction
 
         # active allocations per resource type
         self._allocations: dict[str, list[Allocation]] = {
@@ -94,6 +104,7 @@ class ResourceAllocatorAgent(BaseAgent):
         # simulated network enforcement state
         self.blocked_ips:          set[str] = set()
         self.quarantined_segments: set[str] = set()
+        self.throttled:            set[str] = set()   # segment or src_ip keys
 
         # audit ledger (for tests and introspection)
         self.grants:    list[dict] = []
@@ -153,6 +164,13 @@ class ResourceAllocatorAgent(BaseAgent):
 
         if len(current) < capacity:
             await self._grant(request)
+            return
+
+        if self.naive_auction:
+            await self._deny(
+                request,
+                reason=f"at capacity ({len(current)}/{capacity}); naive FCFS, no eviction",
+            )
             return
 
         # At capacity — find weakest existing allocation
@@ -286,6 +304,14 @@ class ResourceAllocatorAgent(BaseAgent):
                     "[%s] enforced QUARANTINE_SEGMENT  seg=%s", self.agent_id, seg
                 )
 
+        elif action in ("THROTTLE_SEGMENT", "THROTTLE_SOURCE_IP"):
+            key = target.get("segment") or target.get("src_ip") or request.segment
+            if key:
+                self.throttled.add(key)
+                logger.info(
+                    "[%s] enforced %s  key=%s", self.agent_id, action, key
+                )
+
     # ------------------------------------------------------------------
     # Stub for future explicit bids from agents
     # ------------------------------------------------------------------
@@ -305,3 +331,6 @@ class ResourceAllocatorAgent(BaseAgent):
 
     def is_quarantined(self, segment: str) -> bool:
         return segment in self.quarantined_segments
+
+    def is_throttled(self, key: str) -> bool:
+        return key in self.throttled

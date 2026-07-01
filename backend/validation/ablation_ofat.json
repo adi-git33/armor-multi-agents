@@ -1,0 +1,118 @@
+{
+  "seeds": [
+    2026
+  ],
+  "ofat_scenarios": [
+    1
+  ],
+  "rows": {
+    "Full baseline": {
+      "flags": {
+        "naive_ladder": true,
+        "naive_voting": true,
+        "use_tia": false,
+        "naive_auction": true
+      },
+      "isolates": "\u2014 (reference floor)",
+      "scenarios": {
+        "1": {
+          "mean": 0.8099999999999999,
+          "std": 0.0,
+          "raw": {
+            "2026": 0.8099999999999999
+          }
+        }
+      }
+    },
+    "+ proportionality": {
+      "flags": {
+        "naive_ladder": false,
+        "naive_voting": true,
+        "use_tia": false,
+        "naive_auction": true
+      },
+      "isolates": "\u00a74.1 marginal effect",
+      "scenarios": {
+        "1": {
+          "mean": 0.9,
+          "std": 0.0,
+          "raw": {
+            "2026": 0.9
+          }
+        }
+      }
+    },
+    "+ voting": {
+      "flags": {
+        "naive_ladder": true,
+        "naive_voting": false,
+        "use_tia": false,
+        "naive_auction": true
+      },
+      "isolates": "\u00a74.4 marginal effect",
+      "scenarios": {
+        "1": {
+          "mean": 0.8099999999999999,
+          "std": 0.0,
+          "raw": {
+            "2026": 0.8099999999999999
+          }
+        }
+      }
+    },
+    "+ coalition": {
+      "flags": {
+        "naive_ladder": true,
+        "naive_voting": true,
+        "use_tia": true,
+        "naive_auction": true
+      },
+      "isolates": "\u00a74.3 marginal effect",
+      "scenarios": {
+        "1": {
+          "mean": 0.8099999999999999,
+          "std": 0.0,
+          "raw": {
+            "2026": 0.8099999999999999
+          }
+        }
+      }
+    },
+    "+ auction": {
+      "flags": {
+        "naive_ladder": true,
+        "naive_voting": true,
+        "use_tia": false,
+        "naive_auction": false
+      },
+      "isolates": "\u00a74.2 marginal effect",
+      "scenarios": {
+        "1": {
+          "mean": 0.8099999999999999,
+          "std": 0.0,
+          "raw": {
+            "2026": 0.8099999999999999
+          }
+        }
+      }
+    },
+    "Full advanced": {
+      "flags": {
+        "naive_ladder": false,
+        "naive_voting": false,
+        "use_tia": true,
+        "naive_auction": false
+      },
+      "isolates": "\u2014 (reference ceiling)",
+      "scenarios": {
+        "1": {
+          "mean": 0.855,
+          "std": 0.0,
+          "raw": {
+            "2026": 0.855
+          }
+        }
+      }
+    }
+  }
+}
