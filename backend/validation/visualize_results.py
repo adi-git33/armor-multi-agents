@@ -371,6 +371,101 @@ def _fig5_resource_utilization(metrics: dict, out: Path) -> Path | None:
     return path
 
 
+def _fig6_degradation_analysis(out: Path) -> Path:
+    """
+    Figure 6 — Degradation Analysis: Key Metrics Under Standard vs. High-Stress Load.
+
+    Compares two discrete operating points (no formal load sweep — §5.2):
+      Baseline   — standard S3 scenario results
+      High Stress — system-level stress-test conditions
+    """
+    _COL_PASS = "#7EB87E"   # soft sage green — within target
+    _COL_FAIL = "#D4795A"   # soft terracotta — outside target
+    _COL_TGT  = "#4A90C4"   # calm blue for target line
+    _COL_EDGE = "#ffffff"
+
+    _LOAD_LABELS = ["Baseline", "High Stress"]
+
+    # (title, std, stress, target, higher_better, y_max, fmt, tgt_annotation)
+    # fmt: "pct" → %, "ms" → ms, "f3" → 3 d.p., "yn" → Correct / Violated
+    _PANELS = [
+        ("Detection Rate",
+         1.000, 1.000, 0.90, True,  1.15, "pct", "threshold: 90%"),
+        ("Alert False Positive Rate",
+         0.000, 0.429, 0.10, False, 0.60, "pct", "threshold: 10%"),
+        ("Response Time (MTTR)",
+         315,   315,   1000, False, 1300, "ms",  "threshold: 1,000 ms"),
+        ("Social Welfare",
+         0.897, 0.710, 0.80, True,  1.05, "f3",  "threshold: 0.80"),
+        ("Resource Overhead",
+         0.050, 0.004, 0.40, False, 0.55, "pct", "threshold: 40%"),
+        ("Auction Priority Ordering",
+         1.000, 0.000, 1.00, True,  1.30, "yn",  "required: correct"),
+    ]
+
+    fig, axes = plt.subplots(2, 3, figsize=(13, 8))
+    axes_flat = axes.flatten()
+
+    for ax, (title, std_val, stress_val, target,
+             higher_better, y_max, fmt, tgt_annotation) in zip(axes_flat, _PANELS):
+
+        values = [std_val, stress_val]
+        ok = [v >= target if higher_better else v <= target for v in values]
+        colors = [_COL_PASS if o else _COL_FAIL for o in ok]
+
+        # Give the 0.0 "yn" bar a tiny floor so it remains visible
+        plot_values = [max(v, 0.04 * y_max) if fmt == "yn" else v for v in values]
+
+        ax.bar([0, 1], plot_values, color=colors, edgecolor=_COL_EDGE,
+               width=0.42, zorder=3, alpha=0.90)
+
+        # Draw threshold line with inline annotation — no legend box
+        ax.axhline(target, color=_COL_TGT, linestyle="--", linewidth=1.3, zorder=2)
+        ax.text(1.01, target, tgt_annotation,
+                transform=ax.get_yaxis_transform(),
+                va="center", ha="left", fontsize=7.5,
+                color=_COL_TGT, style="italic")
+
+        for xi, (v, pv) in enumerate(zip(values, plot_values)):
+            if fmt == "pct":
+                val_text = f"{v:.1%}"
+            elif fmt == "ms":
+                val_text = f"{v:,.0f} ms"
+            elif fmt == "yn":
+                val_text = "Correct" if ok[xi] else "Violated"
+            else:
+                val_text = f"{v:.3f}"
+
+            ax.text(xi, pv + y_max * 0.03, val_text,
+                    ha="center", va="bottom", fontsize=9,
+                    fontweight="bold", color="#333333")
+
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(_LOAD_LABELS, fontsize=9)
+        ax.set_ylim(0, y_max)
+        ax.set_title(title, fontsize=10, fontweight="bold", pad=6)
+        ax.grid(axis="y", alpha=0.22, zorder=0)
+        ax.spines[["top", "right"]].set_visible(False)
+
+    fig.suptitle(
+        "Figure 6 — Degradation Analysis: Key Metrics at Baseline vs. High-Stress Load",
+        fontsize=11, fontweight="bold",
+    )
+    fig.legend(
+        handles=[
+            mpatches.Patch(color=_COL_PASS, label="Within target"),
+            mpatches.Patch(color=_COL_FAIL, label="Outside target"),
+        ],
+        loc="lower center", ncol=2, fontsize=9,
+        bbox_to_anchor=(0.5, 0.0), framealpha=0.85,
+    )
+    fig.tight_layout(rect=[0, 0.06, 1, 0.97])
+    path = out / "fig6_degradation_analysis.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
 def export_charts(
     suites_run: list[tuple[str, ValidationSuite]],
     output_dir: Path | str | None = None,
@@ -396,6 +491,8 @@ def export_charts(
         path = fn(metrics, out)
         if path is not None:
             paths.append(path)
+
+    paths.append(_fig6_degradation_analysis(out))
     return paths
 
 

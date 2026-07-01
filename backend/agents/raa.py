@@ -186,6 +186,7 @@ class ResourceAllocatorAgent(BaseAgent):
                     f"at capacity ({len(current)}/{capacity}); "
                     f"bid {request.bid_value:.4f} <= weakest existing {weakest.bid_value:.4f}"
                 ),
+                weakest_existing=weakest.bid_value,
             )
 
     # ------------------------------------------------------------------
@@ -259,16 +260,17 @@ class ResourceAllocatorAgent(BaseAgent):
     # Deny incoming request (cannot beat existing pool)
     # ------------------------------------------------------------------
 
-    async def _deny(self, request: Allocation, reason: str) -> None:
+    async def _deny(self, request: Allocation, reason: str, weakest_existing: float | None = None) -> None:
         entry = {
-            "allocation_id": request.allocation_id,
-            "incident_id":   request.incident_id,
-            "segment":       request.segment,
-            "action":        request.action,
-            "resource_type": request.resource_type,
-            "bid_value":     request.bid_value,
-            "outcome":       "DENIED",
-            "reason":        reason,
+            "allocation_id":      request.allocation_id,
+            "incident_id":        request.incident_id,
+            "segment":            request.segment,
+            "action":             request.action,
+            "resource_type":      request.resource_type,
+            "bid_value":          request.bid_value,
+            "weakest_existing_bid": weakest_existing if weakest_existing is not None else request.bid_value,
+            "outcome":            "DENIED",
+            "reason":             reason,
         }
         self.denials.append(entry)
 

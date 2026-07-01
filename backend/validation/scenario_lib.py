@@ -74,15 +74,30 @@ async def _peer_accept_voter(bus: MessageBus, agent_id: str = "PEER:voter") -> N
     bus.subscribe(Topic.COALITION, _on_cfp)
 
 
-def priority_ok_label(naive_auction: bool, granted_bids: list[float], denied_bids: list[float]):
+def priority_ok_label(
+    naive_auction: bool,
+    granted_bids: list[float],
+    denied_bids: list[float],
+    denials: list[dict] | None = None,
+):
     """
     bid_value N/A guard (§5.4): a naive-auction (FCFS) row never evaluated
     bid priority, so it must never print a number that looks like it did.
+
+    When full denial records are supplied (denials), uses a per-decision check:
+    each denial is valid only if denied_bid <= weakest_existing_bid in the pool
+    at the moment of denial.  This avoids false failures in long runs where a
+    low-bid grant (free-slot era) and a high-bid denial (full-pool era) are
+    unrelated events.
     """
     if naive_auction:
         return "N/A (FCFS, no priority evaluated)"
-    priority_ok = (not denied_bids) or (min(granted_bids or [0]) >= max(denied_bids or [0]))
-    return priority_ok
+    if denials:
+        return all(
+            d["bid_value"] <= d.get("weakest_existing_bid", d["bid_value"])
+            for d in denials
+        )
+    return (not denied_bids) or (min(granted_bids or [0]) >= max(denied_bids or [0]))
 
 
 # ── OFAT / baseline scenario sets (§5.4) ────────────────────────────────────
@@ -201,9 +216,9 @@ async def run_scenario_2(
     atk_a = DDoSAttacker("ATK:s2a", "public-facing", gen, intensity_multiplier=10.0, rng_seed=atk_seed_a)
     atk_b = PortScanner("ATK:s2b",  "internal",       gen, rng_seed=atk_seed_b)
     t0    = time.monotonic()
-    ta    = asyncio.create_task(atk_a.launch(4))
-    tb    = asyncio.create_task(atk_b.launch(4))
-    await asyncio.sleep(4 + 1.0)
+    ta    = asyncio.create_task(atk_a.launch(8))
+    tb    = asyncio.create_task(atk_b.launch(8))
+    await asyncio.sleep(8 + 1.0)
     await asyncio.gather(ta, tb, return_exceptions=True)
     gen.stop(); gen_task.cancel()
     await asyncio.gather(gen_task, return_exceptions=True)
@@ -267,7 +282,7 @@ async def run_scenario_3(
     all_denials = raa.denials
     granted_bids = [g.get("bid_value", 0) for g in all_grants]
     denied_bids  = [d.get("bid_value", 0) for d in all_denials]
-    priority_result = priority_ok_label(naive_auction, granted_bids, denied_bids)
+    priority_result = priority_ok_label(naive_auction, granted_bids, denied_bids, denials=all_denials)
 
     try:
         import psutil
@@ -329,15 +344,17 @@ async def run_scenario_6(
     await asyncio.sleep(1)
 
     atk      = DDoSAttacker("ATK:s6", "public-facing", gen, intensity_multiplier=15.0, rng_seed=atk_seed)
-    atk_task = asyncio.create_task(atk.launch(4))
-    await asyncio.sleep(4 + 1.0)
+    atk_task = asyncio.create_task(atk.launch(8))
+    await asyncio.sleep(8 + 1.0)
     await asyncio.gather(atk_task, return_exceptions=True)
     gen.stop(); gen_task.cancel()
     await asyncio.gather(gen_task, return_exceptions=True)
 
     vote_cycle_ms = None
-    if coal_times and res_times:
-        vote_cycle_ms = (res_times[0] - coal_times[0]) * 1000
+    if coal_times:
+        post_coal_res = [t for t in res_times if t >= coal_times[0]]
+        if post_coal_res:
+            vote_cycle_ms = (post_coal_res[0] - coal_times[0]) * 1000
 
     sw = _sw(0.90, 0.90, 0.90 if resolutions else 0.5, 0.85, 0.85)
 

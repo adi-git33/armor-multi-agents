@@ -288,7 +288,7 @@ class ResponseCoordinatorAgent(BaseAgent):
             )
             return
 
-        action = self._pick_action(seg, clf)
+        action, level = self._select_action(seg, clf, conf, now, bypass=True)
 
         # Carry src_ip into evidence so _resolve can build enforcement_target
         evidence = dict(c.get("evidence", {}))
@@ -346,7 +346,7 @@ class ResponseCoordinatorAgent(BaseAgent):
             return   # buffer — wait for more evidence
 
         classification = report.get("classification", "UNKNOWN")
-        action         = self._pick_action(seg, classification)
+        action, level  = self._select_action(seg, classification, confidence, now)
 
         incident = Incident(
             incident_id    = str(uuid.uuid4())[:8],
@@ -450,7 +450,17 @@ class ResponseCoordinatorAgent(BaseAgent):
         incident.votes_reject = 0
         incident.resolved_at  = time.monotonic()
 
-        self._cooldown[incident.segment] = incident.resolved_at
+        # Mirror _resolve()'s ladder-aware escalation-state update.
+        # Only apply full RESOLUTION_COOLDOWN at the max rung; non-max rungs
+        # advance _esc_level so the next threat triggers escalation.
+        levels        = ESCALATION_ACTIONS.get(incident.classification, ["LOG_ONLY"])
+        current_level = self._esc_level.get(incident.segment, 0)
+        self._last_action[incident.segment] = incident.resolved_at
+        if current_level < len(levels) - 1:
+            self._esc_level[incident.segment] = current_level + 1
+        else:
+            self._cooldown[incident.segment]  = incident.resolved_at
+            self._esc_level[incident.segment] = 0
 
         evidence = incident.source_report.get("evidence", {})
         enforcement_target = self._build_enforcement_target(
@@ -589,15 +599,10 @@ class ResponseCoordinatorAgent(BaseAgent):
                 self._cooldown[incident.segment]  = incident.resolved_at
                 self._esc_level[incident.segment] = 0
 
-            # Build enforcement_target so RAA / EnforcementStub knows exactly
-            # which resource to apply the action to
-            evidence = incident.source_report.get("evidence", {})
-            if incident.action == "BLOCK_SOURCE_IP":
-                src_ip = evidence.get("src_ip", "")
-                if src_ip:
-                    enforcement_target["src_ip"] = src_ip
-            elif incident.action in ("QUARANTINE_SEGMENT", "THROTTLE_SEGMENT"):
-                enforcement_target["segment"] = incident.segment
+            evidence           = incident.source_report.get("evidence", {})
+            enforcement_target = self._build_enforcement_target(
+                incident.action, incident.segment, evidence
+            )
 
             resolution = {
                 "incident_id":        incident.incident_id,
