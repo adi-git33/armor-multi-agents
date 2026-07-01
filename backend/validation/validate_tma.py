@@ -294,6 +294,15 @@ async def run() -> ValidationSuite:
         note=f"DR≈{dr_val:.2f}, FPR≈{fpr:.4f}, MTTR_alert={ALERT_LATENCY_MS}ms",
     )
 
+    suite.set_metrics({
+        "defense": {
+            "FPR_TMA": {"value": fpr, "target": MAX_FPR, "passed": fpr < MAX_FPR,
+                        "label": "TMA FPR", "lower_is_better": True},
+            "DR": {"value": dr_val, "target": 0.90, "passed": dr_val >= 0.90,
+                   "label": "TMA Detection Rate"},
+        },
+    })
+
     suite.print_results()
     return suite
 

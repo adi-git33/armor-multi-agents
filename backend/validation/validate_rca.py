@@ -191,6 +191,22 @@ async def run() -> ValidationSuite:
                 expected="> 0",
                 note=f"avail={availability:.3f}, MTTR={mttr_val:.0f}ms, prop={prop_score}")
 
+    suite.set_metrics({
+        "defense": {
+            "MTTR_ms": {"value": mttr_val, "target": MAX_MTTR_MS,
+                        "passed": mttr_val < MAX_MTTR_MS,
+                        "label": "RCA MTTR", "lower_is_better": True},
+            "availability": {"value": availability, "target": MIN_AVAILABILITY,
+                             "passed": availability > MIN_AVAILABILITY,
+                             "label": "RCA Availability"},
+        },
+        "agent_utilities": {
+            "RCA": {"value": u_rca, "passed": u_rca > 0,
+                    "formula": "avail × (1/MTTR) × prop_score",
+                    "inputs": f"avail={availability:.3f}, MTTR={mttr_val:.0f} ms"},
+        },
+    })
+
     await rca.stop()
     suite.print_results()
     return suite

@@ -220,3 +220,5 @@ __marimo__/
 
 **/__pycache__/
 **/node_modules/
+
+**/my_report/

@@ -3,3 +3,5 @@ scikit-learn>=1.4
 fastapi>=0.111
 uvicorn[standard]>=0.29
 websockets>=12.0
+psutil>=5.9
+matplotlib>=3.8

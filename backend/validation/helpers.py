@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 
 # ── colours (disabled when not a tty) ─────────────────────────────────
@@ -45,7 +45,12 @@ class ValidationSuite:
     def __init__(self, title: str) -> None:
         self.title   = title
         self.results: list[ValidationResult] = []
+        self.metrics: dict[str, Any] = {}
         self._t0     = time.monotonic()
+
+    def set_metrics(self, data: Mapping[str, Any]) -> None:
+        """Merge structured chart/export data produced by this suite."""
+        self.metrics.update(data)
 
     def add(self, result: ValidationResult) -> None:
         self.results.append(result)

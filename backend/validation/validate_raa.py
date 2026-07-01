@@ -199,6 +199,16 @@ async def run() -> ValidationSuite:
                 expected="> 0",
                 note=f"efficiency={efficiency:.2f}, overhead={overhead:.3f}")
 
+    suite.set_metrics({
+        "resource": {
+            "overhead": {"value": overhead, "target": MAX_OVERHEAD_PCT,
+                         "passed": overhead < MAX_OVERHEAD_PCT},
+            "efficiency": {"value": efficiency, "target": 0.80,
+                           "passed": efficiency >= 0.80 or len(raa.grants) == 0},
+            "grants": len(raa.grants),
+        },
+    })
+
     suite.print_results()
     return suite
 

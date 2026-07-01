@@ -11,6 +11,8 @@ Usage:
 Options:
     --quick          Skip slow stress-test suites (TIA, RAA, scenarios)
     --suite SUITE    Run only one suite: tma | aca | rca | tia | raa | system | scenarios
+    --no-charts      Skip matplotlib chart export
+    --chart-dir DIR  Directory for PNG charts (default: validation/charts/)
 
 Output:
     ┌─────────────────────────────────────────────────────────────────┐
@@ -35,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from validation.helpers import ValidationSuite, ValidationResult, GREEN, RED, BOLD, RESET, YELLOW, CYAN
+from validation.visualize_results import export_charts, print_chart_summary
 
 # ── suite registry ─────────────────────────────────────────────────────
 SUITES = {
@@ -48,6 +51,18 @@ SUITES = {
 }
 
 QUICK_SUITES = ["tma", "aca", "rca", "system"]
+
+
+def _apply_vote_window_ms(ms: float) -> None:
+    """Patch RCA vote window; reload validation modules that bind VOTE_WINDOW at import."""
+    import importlib
+    import agents.rca as rca_mod
+
+    rca_mod.VOTE_WINDOW = ms / 1000.0
+    for name in sorted(sys.modules):
+        mod_base = name.rsplit(".", 1)[-1]
+        if mod_base.startswith("validate_"):
+            importlib.reload(sys.modules[name])
 
 
 async def run_suite(module_name: str) -> ValidationSuite:
@@ -141,6 +156,60 @@ def _print_master_summary(
     return all_ok
 
 
+def _print_vote_window_comparison(
+    runs: list[tuple[int, list[tuple[str, ValidationSuite]], float]],
+) -> None:
+    """Side-by-side summary for vote-window-sensitive checks."""
+    labels = [f"{ms} ms" for ms, _, _ in runs]
+    w = 88
+
+    print("\n")
+    print("=" * w)
+    print(f"  {BOLD}VOTE WINDOW COMPARISON{RESET}")
+    print("=" * w)
+    print(f"  {'Check':<42} {'Expected':<18} " + "  ".join(f"{lbl:>14}" for lbl in labels))
+    print("  " + "─" * (w - 4))
+
+    sensitive = (
+        ("FR-30", "mttr"),
+        ("FR-31", "avail"),
+        ("S1", "mttr"),
+        ("S1", "avail"),
+        ("S6", "cycle"),
+        ("SW", "social welfare"),
+        ("D-RCA-1", "mttr"),
+    )
+
+    for req_id, keyword in sensitive:
+        row_label = f"{req_id} ({keyword})"
+        cells: list[str] = []
+        expected = "—"
+        for _, suites_run, _ in runs:
+            all_results = [(lbl, r) for lbl, suite in suites_run for r in suite.results]
+            r = _find(all_results, req_id, keyword)
+            if r is None:
+                cells.append(f"{YELLOW}SKIP{RESET}".rjust(14 + len(YELLOW) + len(RESET)))
+                continue
+            if expected == "—" and r.expected is not None:
+                expected = str(r.expected)[:16]
+            mark = f"{GREEN}PASS{RESET}" if r.passed else f"{RED}FAIL{RESET}"
+            obs = str(r.observed)[:12] if r.observed is not None else "—"
+            cells.append(f"{mark} {obs}")
+
+        print(f"  {row_label:<42} {expected:<18} " + "  ".join(cells))
+
+    print("\n  " + "─" * (w - 6))
+    for ms, suites_run, wall in runs:
+        total = sum(s.total_count for _, s in suites_run)
+        passed = sum(s.pass_count for _, s in suites_run)
+        failed = total - passed
+        color = GREEN if failed == 0 else RED
+        print(f"  VOTE_WINDOW={ms} ms:  "
+              f"{color}{passed}/{total} passed{RESET}  "
+              f"wall={wall:.1f}s")
+    print("=" * w + "\n")
+
+
 def _find(
     all_results: list[tuple[str, ValidationResult]],
     req_id: str,
@@ -164,6 +233,14 @@ async def main(argv=None) -> int:
                         help="Run only fast suites (tma, aca, rca, system)")
     parser.add_argument("--suite",  choices=list(SUITES), default=None,
                         help="Run a single suite")
+    parser.add_argument("--vote-window-ms", type=float, default=None, metavar="MS",
+                        help="Override RCA VOTE_WINDOW (milliseconds)")
+    parser.add_argument("--compare-vote-windows", action="store_true",
+                        help="Run full validation at 2000 ms and 3 ms, then compare")
+    parser.add_argument("--no-charts", action="store_true",
+                        help="Skip matplotlib chart export")
+    parser.add_argument("--chart-dir", default=None, metavar="DIR",
+                        help="Output directory for PNG charts (default: validation/charts/)")
     args = parser.parse_args(argv)
 
     if args.suite:
@@ -173,33 +250,63 @@ async def main(argv=None) -> int:
     else:
         keys = list(SUITES)
 
-    print("\n")
-    print("=" * 80)
-    print(f"  {BOLD}ARMOR MAS — Starting Validation Runner{RESET}")
-    print(f"  Suites: {', '.join(keys)}")
-    print("=" * 80)
+    vote_windows: list[float | None]
+    if args.compare_vote_windows:
+        vote_windows = [2000.0, 3.0]
+    elif args.vote_window_ms is not None:
+        vote_windows = [args.vote_window_ms]
+    else:
+        vote_windows = [None]
 
-    t_start      = time.monotonic()
-    suites_run: list[tuple[str, ValidationSuite]] = []
+    compare_runs: list[tuple[int, list[tuple[str, ValidationSuite]], float]] = []
+    last_all_ok = True
 
-    for key in keys:
-        module_name, label = SUITES[key]
-        print(f"\n  ▶  Running {BOLD}{label}{RESET} …")
-        try:
-            suite = await run_suite(module_name)
-            suites_run.append((label, suite))
-        except Exception as exc:
-            print(f"  {RED}ERROR in {label}: {exc}{RESET}")
-            # Create a failed stub suite so it shows in the summary
-            stub = ValidationSuite(label)
-            stub.check(key.upper(), f"Suite {label} raised an exception", False,
-                       observed=str(exc), expected="no exception")
-            suites_run.append((label, stub))
+    for vw_ms in vote_windows:
+        if vw_ms is not None:
+            _apply_vote_window_ms(vw_ms)
+            vw_label = f"VOTE_WINDOW={vw_ms:.0f} ms"
+        else:
+            vw_label = "default VOTE_WINDOW"
 
-    total_wall = time.monotonic() - t_start
-    all_ok = _print_master_summary(suites_run, total_wall)
+        print("\n")
+        print("=" * 80)
+        print(f"  {BOLD}ARMOR MAS — Starting Validation Runner{RESET}")
+        print(f"  Suites: {', '.join(keys)}")
+        print(f"  {vw_label}")
+        print("=" * 80)
 
-    return 0 if all_ok else 1
+        t_start      = time.monotonic()
+        suites_run: list[tuple[str, ValidationSuite]] = []
+
+        for key in keys:
+            module_name, label = SUITES[key]
+            print(f"\n  ▶  Running {BOLD}{label}{RESET} …")
+            try:
+                suite = await run_suite(module_name)
+                suites_run.append((label, suite))
+            except Exception as exc:
+                print(f"  {RED}ERROR in {label}: {exc}{RESET}")
+                stub = ValidationSuite(label)
+                stub.check(key.upper(), f"Suite {label} raised an exception", False,
+                           observed=str(exc), expected="no exception")
+                suites_run.append((label, stub))
+
+        total_wall = time.monotonic() - t_start
+        last_all_ok = _print_master_summary(suites_run, total_wall)
+        if not args.no_charts:
+            try:
+                chart_paths = export_charts(suites_run, args.chart_dir)
+                print_chart_summary(chart_paths)
+            except ImportError as exc:
+                print(f"\n  {YELLOW}Charts skipped: {exc} "
+                      f"(pip install matplotlib){RESET}")
+        if args.compare_vote_windows and vw_ms is not None:
+            compare_runs.append((int(vw_ms), suites_run, total_wall))
+
+    if compare_runs:
+        _print_vote_window_comparison(compare_runs)
+
+    return 0 if last_all_ok else 1
 
 
 if __name__ == "__main__":

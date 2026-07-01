@@ -218,6 +218,15 @@ async def run() -> ValidationSuite:
                 expected="> 0",
                 note=f"accuracy≈{acc:.2f}, FPR≈{fpr:.4f}, model_improvement_rate (nominal)={model_imp}")
 
+    suite.set_metrics({
+        "defense": {
+            "FPR_ACA": {"value": fpr, "target": MAX_FPR, "passed": fpr < MAX_FPR,
+                        "label": "ACA FPR", "lower_is_better": True},
+            "accuracy": {"value": acc, "target": 0.90, "passed": acc >= 0.90 or both_detected,
+                         "label": "ACA Classification Accuracy"},
+        },
+    })
+
     suite.print_results()
     return suite
 

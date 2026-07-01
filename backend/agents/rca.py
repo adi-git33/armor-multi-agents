@@ -47,7 +47,7 @@ MIN_CONFIDENCE      = 0.70   # below this → ignored entirely
 HIGH_CONFIDENCE     = 0.85   # above this → single report is enough to act
 MIN_CORROBORATION   = 2      # below HIGH_CONFIDENCE need this many reports in window
 HISTORY_WINDOW      = 60.0   # seconds of threat-report history per segment
-VOTE_WINDOW         = 2.0    # seconds to wait for external coalition votes
+VOTE_WINDOW         = 0.3    # seconds to wait for external coalition votes
 RESOLUTION_COOLDOWN = 30.0   # seconds before re-escalating the same segment
 
 # Maps classification to proportional action
