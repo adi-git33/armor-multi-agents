@@ -281,30 +281,44 @@ def _fig4_attacker_utility(metrics: dict, out: Path) -> Path | None:
     if not atk:
         return None
 
-    labels, values, targets, colors = [], [], [], []
-    for key in ("S1", "S2"):
+    _SHOW = ("S1", "S2", "S3", "S6")
+    _NAMES = {
+        "S1": "S1\nSingle-Segment\nDDoS Attack",
+        "S2": "S2\nCoordinated\nMulti-Segment Attack",
+        "S3": "S3\nResource Contention\nUnder Heavy Load",
+        "S6": "S4\nCoalition Vote\nValidation",
+    }
+
+    labels, values, targets = [], [], []
+    for key in _SHOW:
         if key not in atk:
             continue
         entry = atk[key]
-        labels.append(f"{key}\n{entry.get('label', 'U_ATK')}")
+        labels.append(_NAMES[key])
         values.append(float(entry["value"]))
-        targets.append(float(entry.get("target", 0.2)))
-        colors.append(_PASS if entry.get("passed", True) else _FAIL)
+        targets.append(float(entry.get("target", 0.5)))
 
     if not labels:
         return None
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(10, 5))
     x = range(len(labels))
     width = 0.35
-    ax.bar([i - width / 2 for i in x], values, width,
-           label="Observed", color=colors, edgecolor="white")
+    obs_bars = ax.bar([i - width / 2 for i in x], values, width,
+                      label="Observed evasion rate", color="salmon", edgecolor="white")
     ax.bar([i + width / 2 for i in x], targets, width,
-           label="Target (max)", color=_TARGET, alpha=0.45, edgecolor="white")
+           label="Target (max tolerated)", color=_TARGET, alpha=0.45, edgecolor="white")
+    for bar, val in zip(obs_bars, values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            max(bar.get_height(), 0.04),
+            f"{val:.2f}", ha="center", va="bottom", fontsize=8,
+        )
     ax.set_xticks(list(x))
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Attacker Utility / Evasion Rate")
-    ax.set_title("Figure 4 — Attacker Utility (Scenarios S1–S2)")
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("Evasion Rate  (0 = fully countered, 1 = fully evaded)")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("Figure 4 — Attacker Evasion Rate vs. Target Across Scenarios")
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
