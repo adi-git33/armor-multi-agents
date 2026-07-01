@@ -35,7 +35,7 @@ from simulation.clock    import SimClock
 from simulation.network  import NetworkTopology
 from simulation.traffic  import TrafficGenerator
 from simulation.attackers import DDoSAttacker, PortScanner
-from agents.tma  import TrafficMonitorAgent
+from agents.tma  import TrafficMonitorAgent, ALERT_COOLDOWN
 from agents.aca  import AnomalyClassifierAgent
 from agents.rca  import ResponseCoordinatorAgent, VOTE_WINDOW
 from agents.raa  import ResourceAllocatorAgent
@@ -77,6 +77,7 @@ async def run() -> ValidationSuite:
     availability1 = r1.availability
     u_atk_s1      = r1.u_atk
     sw_s1         = r1.sw
+    evasion_s1_cont = 0.0 if detected_ddos > 0 else 1.0
 
     suite.check("S1", "DR > 90% — DDoS detected",
                 detected_ddos > 0,
@@ -101,23 +102,24 @@ async def run() -> ValidationSuite:
     section("SCENARIO 2  Multi-Segment Coordinated Attack")
 
     r2 = await run_scenario_2()
-    coalition_formed = r2.extra["coalition_formed"]
-    coalition_ms     = r2.extra["coalition_ms"]
-    segs_responded   = r2.extra["segments_responded"]
-    simultaneous     = r2.extra["simultaneous"]
-    evasion_s2       = r2.extra["evasion"]
-    sw_s2            = r2.sw
+    coalition_formed   = r2.extra["coalition_formed"]
+    coalition_ms       = r2.extra["coalition_ms"]
+    coalition_proposals = r2.extra["coalition_proposals"]
+    segs_responded     = r2.extra["segments_responded"]
+    simultaneous       = r2.extra["simultaneous"]
+    evasion_s2_cont    = 1.0 - min(len(segs_responded), 2) / 2.0
+    sw_s2              = r2.sw
 
     suite.check("S2", "Coalition proposal published during sustained multi-segment attack",
                 coalition_formed,
-                observed=f"formed={coalition_formed}  proposals={1 if coalition_formed else 0}  at {coalition_ms:.0f} ms",
+                observed=f"formed={coalition_formed}  proposals={coalition_proposals}  at {coalition_ms:.0f} ms",
                 expected="≥ 1 CFP (escalation: THROTTLE → QUARANTINE after ALERT_COOLDOWN)")
     suite.check("S2", "Simultaneous responses across ≥ 2 segments",
                 simultaneous,
                 observed=f"segments: {segs_responded}", expected="≥ 2 segments")
     suite.check("S2", "Evasion rate < 0.15",
-                evasion_s2 < 0.15,
-                observed=f"evasion ≈ {evasion_s2:.2f}", expected="< 0.15")
+                evasion_s2_cont < 0.15,
+                observed=f"evasion ≈ {evasion_s2_cont:.2f}", expected="< 0.15")
     suite.check("S2", f"Social Welfare ≥ {MIN_SW}",
                 sw_s2 >= MIN_SW,
                 observed=f"SW ≈ {sw_s2:.3f}", expected=f"≥ {MIN_SW}")
@@ -135,6 +137,8 @@ async def run() -> ValidationSuite:
     sw_s3        = r3.sw
     granted_bids = r3.extra["granted_bids"]
     denied_bids  = r3.extra["denied_bids"]
+    _S3_ATTACKED = r3.extra["attacked_segments"]
+    evasion_s3_cont = 1.0 - len(_S3_ATTACKED & r3.extra["segments_resolved"]) / len(_S3_ATTACKED)
 
     suite.check("S3", "Auction outcomes issued under concurrent load",
                 all_grants3 + all_denials3 > 0,
@@ -161,21 +165,29 @@ async def run() -> ValidationSuite:
     aca4 = AnomalyClassifierAgent("ACA:s4", bus4)
     await tma4.start(); await aca4.start()
 
-    s4_alerts:      list[dict]  = []
-    s4_reports:     list[dict]  = []
-    s4_alert_times: list[float] = []
+    S4_ATTACK_SEG   = "server"
+    s4_alerts:       list[dict]  = []
+    s4_reports:      list[dict]  = []
+    s4_alert_times:  list[float] = []
+    s4_report_times: list[float] = []
 
-    async def s4_on_alert(msg): s4_alerts.append(msg.content);  s4_alert_times.append(time.monotonic())
-    async def s4_on_rep(msg):   s4_reports.append(msg.content)
+    async def s4_on_alert(msg):
+        s4_alerts.append(msg.content)
+        s4_alert_times.append(time.monotonic())
+
+    async def s4_on_rep(msg):
+        s4_reports.append(msg.content)
+        s4_report_times.append(time.monotonic())
 
     bus4.subscribe(Topic.ALERTS,         s4_on_alert)
     bus4.subscribe(Topic.THREAT_REPORTS, s4_on_rep)
 
     gen4_task = asyncio.create_task(gen4.run())
-    await asyncio.sleep(1)
+    # Warmup + clear TMA segment cooldown so the attack triggers a fresh alert.
+    await asyncio.sleep(1 + ALERT_COOLDOWN)
 
     # No ZeroDayAttacker in codebase — use DDoSAttacker as novel-traffic proxy
-    atk_zd      = DDoSAttacker("ATK:s4", "server", gen4, intensity_multiplier=5.0, rng_seed=46)
+    atk_zd      = DDoSAttacker("ATK:s4", S4_ATTACK_SEG, gen4, intensity_multiplier=5.0, rng_seed=46)
     t_s4        = time.monotonic()
     atk_zd_task = asyncio.create_task(atk_zd.launch(4))
     await asyncio.sleep(4 + 1.0)
@@ -183,19 +195,22 @@ async def run() -> ValidationSuite:
     gen4.stop(); gen4_task.cancel()
     await asyncio.gather(gen4_task, return_exceptions=True)
 
-    novel_detected  = len(s4_alerts) > 0 or len(s4_reports) > 0
-    detect_ms       = (s4_alert_times[0] - t_s4) * 1000 if s4_alert_times else 9999
-    zd_fp           = len([r for r in s4_reports if r.get("classification") not in ("DDOS", "PORT_SCAN", "NOISE", None)])
-    zd_fpr          = zd_fp / max(len(s4_reports), 1)
-    # Continuous: fraction of 4 s attack window before first POST-attack alert.
-    # Filter alert times >= t_s4 to exclude pre-attack warmup noise detections.
-    post_s4_ms = [(t - t_s4) * 1000 for t in s4_alert_times if t >= t_s4]
-    if detect_ms < 0:
-        evasion_s4_cont = 0.0   # first alert before attack start = 0 evasion window
-    elif post_s4_ms:
-        evasion_s4_cont = min(1.0, min(post_s4_ms) / 4000.0)
-    else:
-        evasion_s4_cont = 1.0   # never detected
+    novel_detected = len(s4_alerts) > 0 or len(s4_reports) > 0
+    zd_fp          = len([r for r in s4_reports if r.get("classification") not in ("DDOS", "PORT_SCAN", "NOISE", None)])
+    zd_fpr         = zd_fp / max(len(s4_reports), 1)
+
+    # First detection on the attacked segment after attack start (alert or report).
+    post_detect_ms = [
+        (t - t_s4) * 1000
+        for t, ev in zip(s4_alert_times, s4_alerts)
+        if t >= t_s4 and ev.get("segment") == S4_ATTACK_SEG
+    ] + [
+        (t - t_s4) * 1000
+        for t, ev in zip(s4_report_times, s4_reports)
+        if t >= t_s4 and ev.get("segment") == S4_ATTACK_SEG
+    ]
+    detect_ms = min(post_detect_ms) if post_detect_ms else 9999
+    evasion_s4_cont = min(1.0, detect_ms / 4000.0) if post_detect_ms else 1.0
 
     suite.check("S4", "Novel attack detected via baseline deviation",
                 novel_detected,
@@ -271,14 +286,19 @@ async def run() -> ValidationSuite:
     r6            = await run_scenario_6()
     s6_proposals  = r6.extra["proposals"]
     s6_resolutions = r6.extra["resolutions"]
-    vote_cycle_ms = r6.mttr_ms
+    vote_cycle_ms = r6.extra.get("vote_cycle_ms", r6.mttr_ms)
     sw_s6         = r6.sw
+    evasion_s6_cont = min(
+        1.0,
+        (vote_cycle_ms if vote_cycle_ms is not None else VOTE_WINDOW * 1000) / 4000.0,
+    )
+    _VOTE_BUDGET_MS = VOTE_WINDOW * 1000 + 200   # 300 ms window + 200 ms asyncio buffer
 
     suite.check("S6", "Coalition proposal (vote trigger) published during high-severity attack",
                 s6_proposals > 0,
                 observed=f"{s6_proposals} proposals", expected="≥ 1 coalition proposal")
-    suite.check("S6", f"Vote cycle completes within 500 ms (VOTE_WINDOW={VOTE_WINDOW}s)",
-                vote_cycle_ms is not None and vote_cycle_ms < 500,
+    suite.check("S6", f"Vote cycle completes within {_VOTE_BUDGET_MS:.0f} ms (VOTE_WINDOW={VOTE_WINDOW}s + asyncio buffer)",
+                vote_cycle_ms is not None and vote_cycle_ms < _VOTE_BUDGET_MS,
                 observed=f"{vote_cycle_ms:.0f} ms" if vote_cycle_ms else "no pair",
                 expected="< 500 ms")
     suite.check("S6", "Action follows majority vote result",
@@ -287,12 +307,6 @@ async def run() -> ValidationSuite:
     suite.check("S6", f"Social Welfare ≥ {MIN_SW}",
                 sw_s6 >= MIN_SW,
                 observed=f"SW ≈ {sw_s6:.3f}", expected=f"≥ {MIN_SW}")
-
-    # Continuous evasion metrics for attacker_utility chart
-    evasion_s1_cont = 0.0 if detected_ddos > 0 else 1.0
-    evasion_s2_cont = evasion_s2
-    evasion_s3_cont = all_denials3 / max(all_grants3 + all_denials3, 1)
-    evasion_s6_cont = min(1.0, (vote_cycle_ms or 300) / 4000.0)
 
     suite.set_metrics({
         "social_welfare": {

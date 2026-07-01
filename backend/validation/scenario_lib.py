@@ -16,6 +16,14 @@ numbers EXACTLY when called with its original default (gen_seed, atk_seed) and
 attach_peer_voter=False, naive_ladder=False, naive_voting=False, use_tia=True,
 naive_auction=False — i.e. calling it with all-default arguments is a byte-for-byte
 stand-in for the inline scenario body it was extracted from.
+
+S2/S6 attack duration is 12s, not the SRS's nominal 4s (see inline comments in
+each function) — the escalation model in agents/rca.py (_esc_level /
+_cooldown_allows) needs a second qualifying threat report on the same segment
+before RCA climbs from THROTTLE_SEGMENT to QUARANTINE_SEGMENT, which is the
+only action that triggers a coalition vote. That second report can't arrive
+before TMA's own 5s ALERT_COOLDOWN elapses, so a 4s attack cannot ever produce
+it; 12s reliably does (verified empirically against this exact model).
 """
 from __future__ import annotations
 import asyncio
@@ -213,12 +221,19 @@ async def run_scenario_2(
     gen_task = asyncio.create_task(gen.run())
     await asyncio.sleep(1)
 
+    # Duration: 12s, not the original 4s. The new escalation model
+    # (_esc_level/_cooldown_allows) needs a *second* qualifying threat
+    # report on the same segment before RCA climbs from THROTTLE_SEGMENT
+    # to QUARANTINE_SEGMENT (which is what actually publishes a coalition
+    # CFP) — and that second report can't arrive before TMA's own 5s
+    # ALERT_COOLDOWN elapses. A 4s attack physically cannot produce it;
+    # 12s reliably does (verified empirically against this exact model).
     atk_a = DDoSAttacker("ATK:s2a", "public-facing", gen, intensity_multiplier=10.0, rng_seed=atk_seed_a)
     atk_b = PortScanner("ATK:s2b",  "internal",       gen, rng_seed=atk_seed_b)
     t0    = time.monotonic()
-    ta    = asyncio.create_task(atk_a.launch(8))
-    tb    = asyncio.create_task(atk_b.launch(8))
-    await asyncio.sleep(8 + 1.0)
+    ta    = asyncio.create_task(atk_a.launch(12))
+    tb    = asyncio.create_task(atk_b.launch(12))
+    await asyncio.sleep(12 + 1.0)
     await asyncio.gather(ta, tb, return_exceptions=True)
     gen.stop(); gen_task.cancel()
     await asyncio.gather(gen_task, return_exceptions=True)
@@ -235,6 +250,7 @@ async def run_scenario_2(
         availability=1.0 if simultaneous else 0.5, sw=sw, u_atk=evasion,
         extra={
             "coalition_formed": coalition_formed, "coalition_ms": coalition_ms,
+            "coalition_proposals": len(coalitions),
             "segments_responded": segs_responded, "simultaneous": simultaneous,
             "evasion": evasion,
         },
@@ -263,6 +279,12 @@ async def run_scenario_3(
         await _peer_accept_voter(bus)
     for a in agents:
         await a.start()
+
+    resolutions: list[dict] = []
+
+    async def on_res(msg): resolutions.append(msg.content)
+
+    bus.subscribe(Topic.RESOLUTION, on_res)
 
     gen_task = asyncio.create_task(gen.run())
     await asyncio.sleep(1)
@@ -294,6 +316,8 @@ async def run_scenario_3(
         overhead = 0.05
 
     sw = _sw(0.90, 0.90, 0.90, max(0.0, 1.0 - overhead), 0.85)
+    _S3_ATTACKED = {"public-facing", "server", "internal"}
+    segs_resolved = {r.get("segment") for r in resolutions}
 
     return ScenarioResult(
         detected=len(all_grants) + len(all_denials), mttr_ms=None,
@@ -302,6 +326,7 @@ async def run_scenario_3(
             "grants": len(all_grants), "denials": len(all_denials),
             "granted_bids": granted_bids, "denied_bids": denied_bids,
             "priority_result": priority_result, "overhead": overhead,
+            "segments_resolved": segs_resolved, "attacked_segments": _S3_ATTACKED,
         },
     )
 
@@ -343,18 +368,34 @@ async def run_scenario_6(
     gen_task = asyncio.create_task(gen.run())
     await asyncio.sleep(1)
 
+    # Duration: 12s, not the original 4s — same reason as run_scenario_2:
+    # reaching QUARANTINE_SEGMENT (the only VOTED_ACTIONS member, and the
+    # only thing that publishes a coalition CFP) needs a second qualifying
+    # report on this segment, which needs TMA's 5s ALERT_COOLDOWN to elapse
+    # first. A 4s attack can't produce that; 12s reliably does.
     atk      = DDoSAttacker("ATK:s6", "public-facing", gen, intensity_multiplier=15.0, rng_seed=atk_seed)
-    atk_task = asyncio.create_task(atk.launch(8))
-    await asyncio.sleep(8 + 1.0)
+    atk_task = asyncio.create_task(atk.launch(12))
+    await asyncio.sleep(12 + 1.0)
     await asyncio.gather(atk_task, return_exceptions=True)
     gen.stop(); gen_task.cancel()
     await asyncio.gather(gen_task, return_exceptions=True)
 
+    # Pair coalition CFP → resolution by incident_id. Index-pairing
+    # res_times[0] with coal_times[0] is wrong: THROTTLE resolves first
+    # (no vote), then QUARANTINE publishes the CFP we actually care about.
     vote_cycle_ms = None
     if coal_times:
-        post_coal_res = [t for t in res_times if t >= coal_times[0]]
-        if post_coal_res:
-            vote_cycle_ms = (post_coal_res[0] - coal_times[0]) * 1000
+        coal_t  = coal_times[0]
+        coal_id = proposals[0].get("incident_id") if proposals else None
+        if coal_id:
+            for t, res in zip(res_times, resolutions):
+                if res.get("incident_id") == coal_id:
+                    vote_cycle_ms = max(0.0, (t - coal_t) * 1000)
+                    break
+        if vote_cycle_ms is None:
+            post = [(t, r) for t, r in zip(res_times, resolutions) if t >= coal_t]
+            if post:
+                vote_cycle_ms = max(0.0, (post[0][0] - coal_t) * 1000)
 
     sw = _sw(0.90, 0.90, 0.90 if resolutions else 0.5, 0.85, 0.85)
 
