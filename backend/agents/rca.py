@@ -8,7 +8,7 @@ Responsibilities
 1. Receive high-confidence threat reports (from ACA via threat-reports topic).
 2. Deliberate — check corroborating evidence before acting.
 3. Select a proportional action via the THROTTLE → BLOCK/QUARANTINE
-   escalation ladder (FR-13; see _select_action).
+   escalation ladder (FR-13; see _pick_action).
 4. Voted actions (QUARANTINE only): initiate a coalition vote — publish
    CALL_FOR_PROPOSAL to the coalition topic, collect ACCEPT/REJECT votes,
    decide by majority. Non-voted actions (THROTTLE/BLOCK/LOG) execute
@@ -22,51 +22,53 @@ and initiates coalitions itself.  When TIA takes over the triggering role,
 this path remains as a fallback — two triggers are harmless because the
 per-segment cooldown deduplicates them.
 
-Proportional response ladder (FR-13)
---------------------------------------
-Each classification has a 2-tier escalation ladder (see ESCALATION_ACTIONS).
-A segment starts at level 0 (least disruptive) and only climbs to level 1
-if a new confirmed threat for the same segment/classification arrives
-within ESCALATION_WINDOW of the last action *and* is not weaker than the
-last one — i.e., the lower tier visibly failed to stop the attack.
-
-A TIA-corroborated incident (stronger, cross-segment evidence — it only
-fires when 2+ segments already show the same pattern) bypasses the ladder
-and acts at the top tier immediately. A single-report confidence bypass
-was considered but dropped: empirically, ACA's classifier confidence for
-DDOS is highly volatile per-sample (observed swinging between 0.68 and
-1.00 across consecutive samples of the *same* attack, uncorrelated with
-attack intensity), so it is not a controllable or meaningful proxy for
-"how severe is this" — using it as an escalation-bypass trigger would
-make ladder behavior effectively random rather than proportional.
-
-BDI roles
-----------
-Beliefs  : recent threat reports per segment (60 s window)
-           cooldown state per segment
-           per-segment mitigation/escalation state (level, action, when)
-           open incidents awaiting votes
-           escalation level per segment (ladder rung)
-Desires  : act on every real threat; suppress noise and duplicates;
-           escalate only when the threat persists
-Intention: _on_threat_report() → _deliberate() → _call_vote() → _resolve()
-
-Escalation ladder
------------------
+Escalation ladder (FR-13)
+--------------------------
 Each classification maps to an ordered list of actions (ESCALATION_ACTIONS).
-The first confirmed threat picks level 0 (least disruptive).  If a second
-confirmed threat for the same segment arrives within ESCALATION_WINDOW seconds,
-the next rung is used.  The full RESOLUTION_COOLDOWN is only applied at the
-maximum rung; lower rungs use a short MIN_ESCALATION_GAP debounce so the
-ladder can climb during a sustained attack.
+The first confirmed threat picks rung 0 (least disruptive).  If a second
+confirmed threat for the same segment arrives within ESCALATION_WINDOW
+seconds, the next rung is used.  The full RESOLUTION_COOLDOWN is only
+applied once the max rung is reached and resolved; mid-escalation reports
+only need to clear a short MIN_ESCALATION_GAP debounce, so the ladder can
+climb during a sustained attack. See _cooldown_allows()/_pick_action().
 
   DDOS:       THROTTLE_SEGMENT (rung 0) → QUARANTINE_SEGMENT (rung 1, max)
   PORT_SCAN:  BLOCK_SOURCE_IP  (rung 0, max)
   NOISE:      LOG_ONLY         (rung 0, max)
 
-THROTTLE_SEGMENT is executed immediately without a coalition vote (it is
-minimally disruptive and must not be delayed).  QUARANTINE_SEGMENT goes
-through the full VOTE_WINDOW coalition vote as before.
+THROTTLE_SEGMENT executes immediately without a coalition vote (minimally
+disruptive, must not be delayed). QUARANTINE_SEGMENT goes through the full
+VOTE_WINDOW coalition vote (see VOTED_ACTIONS).
+
+A TIA-corroborated incident (stronger, cross-segment evidence — it only
+fires when 2+ segments already show the same pattern) bypasses the ladder
+outright and acts at the top tier immediately, same as a single
+CRITICAL_CONFIDENCE report (see _on_threat_intel / _pick_action bypass=True).
+
+Baseline/ablation flags (BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §4.1)
+------------------------------------------------------------------------
+naive_ladder=True   — _pick_action() always returns the top rung on the
+                      first report, reproducing a flat, non-proportional
+                      responder (no escalation wait, no "did the lower
+                      tier fail" check). Does not affect the debounce/
+                      cooldown gating in _cooldown_allows(), which is an
+                      orthogonal anti-spam mechanism, not one of the SDD
+                      §4.1-4.4 coordination mechanisms.
+naive_voting=True   — even QUARANTINE_SEGMENT (the only VOTED_ACTIONS
+                      member) resolves via _execute_immediate(), self-
+                      approved with no CFP / VOTE_WINDOW wait.
+
+BDI roles
+----------
+Beliefs  : recent threat reports per segment (60 s window)
+           cooldown state per segment (last max-rung resolution time)
+           escalation level per segment (ladder rung)
+           open incidents awaiting votes
+Desires  : act on every real threat; suppress noise and duplicates;
+           escalate only when the threat persists; at the least
+           disruptive sufficient tier
+Intention: _on_threat_report() → _deliberate() → _pick_action() →
+           _call_vote() | _execute_immediate() → _resolve()
 """
 
 from __future__ import annotations
@@ -97,14 +99,9 @@ ESCALATION_ACTIONS: dict[str, list[str]] = {
     "PORT_SCAN": ["BLOCK_SOURCE_IP"],
     "NOISE":     ["LOG_ONLY"],
 }
-# If the same segment is threatened again within this many seconds of the
-# last action, step up to the next rung instead of treating it as a new event.
-ESCALATION_WINDOW  = 20.0   # seconds
+
 # Minimum gap between consecutive escalation steps (debounce).
 MIN_ESCALATION_GAP = 1.5    # seconds
-
-# Level-0 aliases — kept for backward-compat imports and simple lookups
-ACTIONS = {clf: lvls[0] for clf, lvls in ESCALATION_ACTIONS.items()}
 
 # Must exceed TMA's own ALERT_COOLDOWN (5.0 s) — that is the earliest a
 # second alert for the same segment can even be published, so anything
@@ -162,11 +159,6 @@ class ResponseCoordinatorAgent(BaseAgent):
         self._esc_level:   dict[str, int]   = {}  # segment → current rung index
         self._last_action: dict[str, float] = {}  # segment → monotonic time of last resolved action
 
-        # Per-segment escalation/mitigation state for the proportional
-        # response ladder (FR-13): {"level", "classification", "confidence",
-        # "acted_at"}. Populated by _select_action().
-        self._mitigation_state: dict[str, dict] = {}
-
         # Completed resolutions for introspection / testing
         self.resolutions: list[dict] = []
 
@@ -198,6 +190,8 @@ class ResponseCoordinatorAgent(BaseAgent):
             and re-apply the RESOLUTION_COOLDOWN check.
 
         In every case a MIN_ESCALATION_GAP debounce prevents rapid duplicates.
+        This gating is unaffected by naive_ladder — it's an anti-spam
+        mechanism, not one of the SDD §4.1-4.4 coordination mechanisms.
         """
         last_act = self._last_action.get(seg, 0.0)
 
@@ -219,11 +213,21 @@ class ResponseCoordinatorAgent(BaseAgent):
         self._esc_level[seg] = 0
         return (now - self._cooldown.get(seg, 0.0)) >= RESOLUTION_COOLDOWN
 
-    def _pick_action(self, seg: str, clf: str) -> str:
-        """Return the action for the current escalation rung of this segment."""
+    def _pick_action(self, seg: str, clf: str, *, bypass: bool = False) -> tuple[str, int]:
+        """
+        Return (action, level) for this segment/classification.
+
+        bypass=True (TIA cross-segment corroboration) or naive_ladder=True
+        (BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §4.1) both skip straight to
+        the top rung. Otherwise use the segment's current escalation rung
+        (maintained by _cooldown_allows()/_resolve()).
+        """
         levels = ESCALATION_ACTIONS.get(clf, ["LOG_ONLY"])
-        level  = self._esc_level.get(seg, 0)
-        return levels[min(level, len(levels) - 1)]
+        if bypass or self.naive_ladder:
+            level = len(levels) - 1
+        else:
+            level = min(self._esc_level.get(seg, 0), len(levels) - 1)
+        return levels[level], level
 
     # ------------------------------------------------------------------
     # Intention 1 — receive ACA threat report
@@ -288,7 +292,7 @@ class ResponseCoordinatorAgent(BaseAgent):
             )
             return
 
-        action = self._pick_action(seg, clf)
+        action, level = self._pick_action(seg, clf, bypass=True)
 
         # Carry src_ip into evidence so _resolve can build enforcement_target
         evidence = dict(c.get("evidence", {}))
@@ -345,8 +349,8 @@ class ResponseCoordinatorAgent(BaseAgent):
         if not act:
             return   # buffer — wait for more evidence
 
-        classification = report.get("classification", "UNKNOWN")
-        action         = self._pick_action(seg, classification)
+        classification   = report.get("classification", "UNKNOWN")
+        action, level    = self._pick_action(seg, classification)
 
         incident = Incident(
             incident_id    = str(uuid.uuid4())[:8],
@@ -370,59 +374,9 @@ class ResponseCoordinatorAgent(BaseAgent):
             await self._execute_immediate(incident)
 
     # ------------------------------------------------------------------
-    # Proportional response ladder (FR-13)
+    # Shared enforcement-target builder (used by both _execute_immediate
+    # and _resolve so the two paths can never disagree on this mapping)
     # ------------------------------------------------------------------
-
-    def _select_action(
-        self, seg: str, classification: str, confidence: float, now: float,
-        *, bypass: bool = False,
-    ) -> tuple[str, int]:
-        """
-        Choose the least-disruptive-sufficient action for this segment and
-        classification, and record the resulting mitigation state.
-
-        bypass=True (TIA cross-segment corroboration) skips straight to the
-        top of the ladder. Otherwise, escalate one level only if the segment
-        is already mid-ladder within ESCALATION_WINDOW *and* the new report
-        is no weaker than the one that triggered the last action — i.e.
-        there is some evidence the lower tier didn't stop the attack, not
-        just that another alert happened to arrive.
-        """
-        ladder = ESCALATION_ACTIONS.get(classification)
-        if not ladder:
-            return "INVESTIGATE", 0
-
-        if bypass or self.naive_ladder:
-            level = len(ladder) - 1
-        else:
-            state = self._mitigation_state.get(seg)
-            if (
-                state
-                and state["classification"] == classification
-                and now - state["acted_at"] <= ESCALATION_WINDOW
-                and confidence >= state["confidence"]
-            ):
-                level = min(state["level"] + 1, len(ladder) - 1)
-            else:
-                level = 0
-
-        self._mitigation_state[seg] = {
-            "level":          level,
-            "classification": classification,
-            "confidence":     confidence,
-            "acted_at":       now,
-        }
-        return ladder[level], level
-
-    def _at_max_level(self, seg: str, classification: str) -> bool:
-        """True if this segment has already escalated to the top of its
-        ladder for this classification — nothing left to try, so the
-        cooldown should suppress further re-evaluation."""
-        ladder = ESCALATION_ACTIONS.get(classification)
-        state  = self._mitigation_state.get(seg)
-        if not ladder or not state or state["classification"] != classification:
-            return False
-        return state["level"] >= len(ladder) - 1
 
     @staticmethod
     def _build_enforcement_target(action: str, segment: str, evidence: dict) -> dict:
@@ -450,7 +404,8 @@ class ResponseCoordinatorAgent(BaseAgent):
         incident.votes_reject = 0
         incident.resolved_at  = time.monotonic()
 
-        self._cooldown[incident.segment] = incident.resolved_at
+        self._last_action[incident.segment] = incident.resolved_at
+        self._advance_escalation(incident)
 
         evidence = incident.source_report.get("evidence", {})
         enforcement_target = self._build_enforcement_target(
@@ -497,6 +452,25 @@ class ResponseCoordinatorAgent(BaseAgent):
         })
 
     # ------------------------------------------------------------------
+    # Escalation-state bookkeeping — shared by _execute_immediate and
+    # _resolve so both resolution paths keep _esc_level/_cooldown in sync.
+    # ------------------------------------------------------------------
+
+    def _advance_escalation(self, incident: Incident) -> None:
+        levels        = ESCALATION_ACTIONS.get(incident.classification, ["LOG_ONLY"])
+        current_level = self._esc_level.get(incident.segment, 0)
+
+        if current_level < len(levels) - 1:
+            # Non-max rung: advance the ladder; no full cooldown yet so the
+            # next threat can trigger the escalation within ESCALATION_WINDOW.
+            self._esc_level[incident.segment] = current_level + 1
+        else:
+            # Max rung reached (or naive_ladder jumped straight there):
+            # apply full cooldown and reset for the next attack.
+            self._cooldown[incident.segment]  = incident.resolved_at
+            self._esc_level[incident.segment] = 0
+
+    # ------------------------------------------------------------------
     # Intention 3 — open coalition vote
     # ------------------------------------------------------------------
 
@@ -506,14 +480,7 @@ class ResponseCoordinatorAgent(BaseAgent):
         # Cast RCA's own vote immediately
         incident.votes_accept += 1
 
-        if incident.action == "THROTTLE_SEGMENT":
-            # Minimally disruptive — execute immediately without waiting for
-            # external coalition votes.  This keeps THROTTLE latency < 50 ms
-            # (well within FR-10) and frees the vote window for QUARANTINE.
-            await self._resolve(incident)
-            return
-
-        # All other actions: publish CFP and wait for coalition votes
+        # Publish CALL_FOR_PROPOSAL so future agents (TIA, RAA) can vote
         await self.publish(
             topic        = Topic.COALITION,
             performative = Performative.CALL_FOR_PROPOSAL,
@@ -575,29 +542,15 @@ class ResponseCoordinatorAgent(BaseAgent):
         passed = incident.votes_accept > incident.votes_reject
 
         if passed:
-            # Update escalation state
-            levels        = ESCALATION_ACTIONS.get(incident.classification, ["LOG_ONLY"])
-            current_level = self._esc_level.get(incident.segment, 0)
             self._last_action[incident.segment] = incident.resolved_at
-
-            if current_level < len(levels) - 1:
-                # Non-max rung: advance the ladder; no full cooldown yet so the
-                # next threat can trigger the escalation within ESCALATION_WINDOW.
-                self._esc_level[incident.segment] = current_level + 1
-            else:
-                # Max rung reached: apply full cooldown and reset for next attack.
-                self._cooldown[incident.segment]  = incident.resolved_at
-                self._esc_level[incident.segment] = 0
+            self._advance_escalation(incident)
 
             # Build enforcement_target so RAA / EnforcementStub knows exactly
             # which resource to apply the action to
             evidence = incident.source_report.get("evidence", {})
-            if incident.action == "BLOCK_SOURCE_IP":
-                src_ip = evidence.get("src_ip", "")
-                if src_ip:
-                    enforcement_target["src_ip"] = src_ip
-            elif incident.action in ("QUARANTINE_SEGMENT", "THROTTLE_SEGMENT"):
-                enforcement_target["segment"] = incident.segment
+            enforcement_target = self._build_enforcement_target(
+                incident.action, incident.segment, evidence
+            )
 
             resolution = {
                 "incident_id":        incident.incident_id,
