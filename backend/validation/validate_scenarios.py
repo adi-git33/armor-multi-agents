@@ -11,6 +11,16 @@ each against its documented success criteria.
   Scenario 5  Agent Failure & Resilience
   Scenario 6  Voting Protocol Validation
 
+S1, S2, S3, S6 delegate their measurement to scenario_lib.run_scenario_N()
+(BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §5.4) — this file only adds the
+PASS/FAIL assertions on top of the numbers those pure callables return.
+Calling them with no flag overrides reproduces the exact pre-refactor
+inline-scenario-body numbers (verified by hand, seed-for-seed, when this
+refactor was made). S4/S5 remain inline: they are detection-only /
+resilience controls, excluded from the four-mechanism ablation by
+construction (see OFAT_SCENARIOS in scenario_lib.py), so there was
+nothing to extract.
+
 Run:  cd backend && python validation/validate_scenarios.py
 """
 from __future__ import annotations
@@ -33,6 +43,7 @@ from agents.tia  import ThreatIntelligenceAgent
 from bus.message_bus import MessageBus
 from core.messages   import Topic
 from helpers import ValidationSuite, section
+from scenario_lib import run_scenario_1, run_scenario_2, run_scenario_3, run_scenario_6
 
 W      = {"TMA": 0.20, "ACA": 0.30, "RCA": 0.25, "RAA": 0.10, "TIA": 0.15}
 MIN_SW = 0.80
@@ -60,46 +71,12 @@ async def run() -> ValidationSuite:
     # ══════════════════════════════════════════════════════════════════
     section("SCENARIO 1  Single-Segment DDoS Attack")
 
-    bus1, gen1, _ = await _make_system(seed=110)
-    tma1 = TrafficMonitorAgent("TMA:s1", bus1, gen1)
-    for cls, aid in [(AnomalyClassifierAgent, "ACA:s1"),
-                     (ResponseCoordinatorAgent, "RCA:s1"),
-                     (ResourceAllocatorAgent,   "RAA:s1"),
-                     (ThreatIntelligenceAgent,  "TIA:s1")]:
-        await cls(aid, bus1).start()
-    await tma1.start()
-
-    s1_reports:    list[dict]  = []
-    s1_resolutions: list[dict] = []
-    s1_tr_times:   list[float] = []
-    s1_res_times:  list[float] = []
-
-    async def s1_on_rep(msg):  s1_reports.append(msg.content);    s1_tr_times.append(time.monotonic())
-    async def s1_on_res(msg):  s1_resolutions.append(msg.content); s1_res_times.append(time.monotonic())
-
-    bus1.subscribe(Topic.THREAT_REPORTS, s1_on_rep)
-    bus1.subscribe(Topic.RESOLUTION,     s1_on_res)
-
-    gen1_task = asyncio.create_task(gen1.run())
-    await asyncio.sleep(1)
-
-    atk_s1      = DDoSAttacker("ATK:s1", "public-facing", gen1, intensity_multiplier=10.0, rng_seed=40)
-    atk_s1_task = asyncio.create_task(atk_s1.launch(4))
-    t_s1        = time.monotonic()
-    await asyncio.sleep(4 + 1.0)
-    await asyncio.gather(atk_s1_task, return_exceptions=True)
-    gen1.stop(); gen1_task.cancel()
-    await asyncio.gather(gen1_task, return_exceptions=True)
-
-    detected_ddos = len([r for r in s1_reports if r.get("classification") == "DDOS"])
-    s1_mttr_ms    = (s1_res_times[0] - s1_tr_times[0]) * 1000 if (s1_tr_times and s1_res_times) else None
-    q_count_s1    = sum(1 for r in s1_resolutions if "QUARANTINE" in str(r.get("action", "")))
-    availability1 = max(0.0, (5 - q_count_s1) / 5)
-    evasion_s1    = 0.0 if detected_ddos > 0 else 0.5
-    u_atk_s1      = evasion_s1 * (1 - availability1)
-    # Continuous: fraction of 4 s attack window before first POST-attack threat report.
-    # Filter to times >= t_s1 so warmup noise alerts don't produce a negative latency.
-    evasion_s1_cont = 0.0 if detected_ddos > 0 else 1.0
+    r1 = await run_scenario_1()
+    detected_ddos = r1.detected
+    s1_mttr_ms    = r1.mttr_ms
+    availability1 = r1.availability
+    u_atk_s1      = r1.u_atk
+    sw_s1         = r1.sw
 
     suite.check("S1", "DR > 90% — DDoS detected",
                 detected_ddos > 0,
@@ -114,7 +91,6 @@ async def run() -> ValidationSuite:
     suite.check("S1", "U_ATK < 0.2 (attacker neutralised)",
                 u_atk_s1 < 0.2,
                 observed=f"U_ATK = {u_atk_s1:.4f}", expected="< 0.2")
-    sw_s1 = _sw(1.0 if detected_ddos else 0.5, 0.9, availability1 * 0.9, 0.85, 0.80)
     suite.check("S1", f"Social Welfare ≥ {MIN_SW}",
                 sw_s1 >= MIN_SW,
                 observed=f"SW ≈ {sw_s1:.3f}", expected=f"≥ {MIN_SW}")
@@ -124,47 +100,13 @@ async def run() -> ValidationSuite:
     # ══════════════════════════════════════════════════════════════════
     section("SCENARIO 2  Multi-Segment Coordinated Attack")
 
-    bus2, gen2, _ = await _make_system(seed=120)
-    tma2 = TrafficMonitorAgent("TMA:s2", bus2, gen2)
-    for cls, aid in [(AnomalyClassifierAgent, "ACA:s2"),
-                     (ResponseCoordinatorAgent,"RCA:s2"),
-                     (ResourceAllocatorAgent,  "RAA:s2"),
-                     (ThreatIntelligenceAgent, "TIA:s2")]:
-        await cls(aid, bus2).start()
-    await tma2.start()
-
-    s2_coalitions:   list[float] = []
-    s2_threats:      list[float] = []
-    s2_resolutions2: list[dict]  = []
-
-    async def s2_on_coal(msg): s2_coalitions.append(time.monotonic())
-    async def s2_on_tr(msg):   s2_threats.append(time.monotonic())
-    async def s2_on_res(msg):  s2_resolutions2.append(msg.content)
-
-    bus2.subscribe(Topic.COALITION,      s2_on_coal)
-    bus2.subscribe(Topic.THREAT_REPORTS, s2_on_tr)
-    bus2.subscribe(Topic.RESOLUTION,     s2_on_res)
-
-    gen2_task = asyncio.create_task(gen2.run())
-    await asyncio.sleep(1)
-
-    atk2a = DDoSAttacker("ATK:s2a", "public-facing", gen2, intensity_multiplier=10.0, rng_seed=41)
-    atk2b = PortScanner("ATK:s2b",  "internal",       gen2, rng_seed=42)
-    t_s2  = time.monotonic()
-    t2a   = asyncio.create_task(atk2a.launch(8))
-    t2b   = asyncio.create_task(atk2b.launch(8))
-    await asyncio.sleep(8 + VOTE_WINDOW + 1.0)
-    await asyncio.gather(t2a, t2b, return_exceptions=True)
-    gen2.stop(); gen2_task.cancel()
-    await asyncio.gather(gen2_task, return_exceptions=True)
-
-    coalition_formed = len(s2_coalitions) > 0
-    coalition_ms     = (s2_coalitions[0] - t_s2) * 1000 if s2_coalitions else 9999
-    segs_responded   = {r.get("segment") for r in s2_resolutions2}
-    simultaneous     = len(segs_responded) >= 2
-    evasion_s2       = 0.0 if coalition_formed else 0.5
-    # Continuous: fraction of 2 attacked segments (public-facing + internal) with no resolution
-    evasion_s2_cont  = 1.0 - min(len(segs_responded), 2) / 2.0
+    r2 = await run_scenario_2()
+    coalition_formed = r2.extra["coalition_formed"]
+    coalition_ms     = r2.extra["coalition_ms"]
+    segs_responded   = r2.extra["segments_responded"]
+    simultaneous     = r2.extra["simultaneous"]
+    evasion_s2       = r2.extra["evasion"]
+    sw_s2            = r2.sw
 
     suite.check("S2", "Coalition proposal published during sustained multi-segment attack",
                 coalition_formed,
@@ -174,9 +116,8 @@ async def run() -> ValidationSuite:
                 simultaneous,
                 observed=f"segments: {segs_responded}", expected="≥ 2 segments")
     suite.check("S2", "Evasion rate < 0.15",
-                evasion_s2_cont < 0.15,
-                observed=f"evasion ≈ {evasion_s2_cont:.2f}", expected="< 0.15")
-    sw_s2 = _sw(0.90, 0.90, 0.90, 0.85, 0.80 if coalition_formed else 0.50)
+                evasion_s2 < 0.15,
+                observed=f"evasion ≈ {evasion_s2:.2f}", expected="< 0.15")
     suite.check("S2", f"Social Welfare ≥ {MIN_SW}",
                 sw_s2 >= MIN_SW,
                 observed=f"SW ≈ {sw_s2:.3f}", expected=f"≥ {MIN_SW}")
@@ -186,63 +127,26 @@ async def run() -> ValidationSuite:
     # ══════════════════════════════════════════════════════════════════
     section("SCENARIO 3  Resource Contention Under Heavy Load")
 
-    bus3, gen3, _ = await _make_system(seed=130)
-    tma3 = TrafficMonitorAgent("TMA:s3", bus3, gen3)
-    aca3 = AnomalyClassifierAgent("ACA:s3", bus3)
-    rca3 = ResponseCoordinatorAgent("RCA:s3", bus3)
-    raa3 = ResourceAllocatorAgent("RAA:s3", bus3)
-    tia3 = ThreatIntelligenceAgent("TIA:s3", bus3)
-    for a in [tma3, aca3, rca3, raa3, tia3]: await a.start()
-
-    s3_resolutions3: list[dict] = []
-    async def s3_on_res(msg): s3_resolutions3.append(msg.content)
-    bus3.subscribe(Topic.RESOLUTION, s3_on_res)
-
-    gen3_task = asyncio.create_task(gen3.run())
-    await asyncio.sleep(1)
-
-    atks3 = [
-        DDoSAttacker("ATK:s3a", "public-facing", gen3, intensity_multiplier=10.0, rng_seed=43),
-        PortScanner("ATK:s3b",  "server",          gen3, rng_seed=44),
-        DDoSAttacker("ATK:s3c", "internal",        gen3, intensity_multiplier=8.0,  rng_seed=45),
-    ]
-    t3_tasks = [asyncio.create_task(a.launch(4)) for a in atks3]
-    await asyncio.sleep(4 + 1.0)
-    await asyncio.gather(*t3_tasks, return_exceptions=True)
-    gen3.stop(); gen3_task.cancel()
-    await asyncio.gather(gen3_task, return_exceptions=True)
-
-    all_grants3  = raa3.grants
-    all_denials3 = raa3.denials
-    # Continuous: fraction of 3 attacked segments (public-facing, server, internal) with no resolution
-    _S3_ATTACKED = {"public-facing", "server", "internal"}
-    segs_resolved_s3 = {r.get("segment") for r in s3_resolutions3}
-    evasion_s3_cont  = 1.0 - len(_S3_ATTACKED & segs_resolved_s3) / len(_S3_ATTACKED)
-    granted_bids = [g.get("bid_value", 0) for g in all_grants3]
-    denied_bids  = [d.get("bid_value", 0) for d in all_denials3]
-    priority_ok  = (not denied_bids) or (min(granted_bids or [0]) >= max(denied_bids or [0]))
-
-    try:
-        import psutil
-        proc = psutil.Process()
-        cpu  = proc.cpu_percent(interval=0.5) / max(psutil.cpu_count(), 1)
-        mem  = proc.memory_info().rss / psutil.virtual_memory().total
-        overhead3 = (cpu / 100 + mem) / 2
-    except ImportError:
-        overhead3 = 0.05
+    r3           = await run_scenario_3()
+    all_grants3  = r3.extra["grants"]
+    all_denials3 = r3.extra["denials"]
+    priority_ok  = r3.extra["priority_result"]
+    overhead3    = r3.extra["overhead"]
+    sw_s3        = r3.sw
+    granted_bids = r3.extra["granted_bids"]
+    denied_bids  = r3.extra["denied_bids"]
 
     suite.check("S3", "Auction outcomes issued under concurrent load",
-                len(all_grants3) + len(all_denials3) > 0,
-                observed=f"{len(all_grants3)} grants  {len(all_denials3)} denials",
+                all_grants3 + all_denials3 > 0,
+                observed=f"{all_grants3} grants  {all_denials3} denials",
                 expected="≥ 1 auction outcome")
     suite.check("S3", "Highest-severity threats win contested resources",
-                priority_ok,
+                priority_ok is True,
                 observed=f"min_granted={min(granted_bids or [0]):.3f} max_denied={max(denied_bids or [0]):.3f}",
                 expected="min_granted ≥ max_denied")
     suite.check("S3", "Resource overhead ≤ 40%",
                 overhead3 < 0.40,
                 observed=f"{overhead3*100:.1f}%", expected="≤ 40%")
-    sw_s3 = _sw(0.90, 0.90, 0.90, max(0.0, 1.0 - overhead3), 0.85)
     suite.check("S3", f"Social Welfare ≥ {MIN_SW}",
                 sw_s3 >= MIN_SW,
                 observed=f"SW ≈ {sw_s3:.3f}", expected=f"≥ {MIN_SW}")
@@ -364,60 +268,22 @@ async def run() -> ValidationSuite:
     # ══════════════════════════════════════════════════════════════════
     section("SCENARIO 6  Voting Protocol Validation")
 
-    bus6, gen6, _ = await _make_system(seed=160)
-    tma6 = TrafficMonitorAgent("TMA:s6", bus6, gen6)
-    aca6 = AnomalyClassifierAgent("ACA:s6", bus6)
-    rca6 = ResponseCoordinatorAgent("RCA:s6", bus6)
-    raa6 = ResourceAllocatorAgent("RAA:s6", bus6)
-    tia6 = ThreatIntelligenceAgent("TIA:s6", bus6)
-    for a in [tma6, aca6, rca6, raa6, tia6]: await a.start()
-
-    s6_proposals: list[dict]  = []
-    s6_coal_times: list[float] = []
-    s6_resolutions: list[dict] = []
-    s6_res_times:   list[float] = []
-
-    async def s6_on_coal(msg): s6_proposals.append(msg.content); s6_coal_times.append(time.monotonic())
-    async def s6_on_res(msg):  s6_resolutions.append(msg.content); s6_res_times.append(time.monotonic())
-
-    bus6.subscribe(Topic.COALITION,  s6_on_coal)
-    bus6.subscribe(Topic.RESOLUTION, s6_on_res)
-
-    gen6_task = asyncio.create_task(gen6.run())
-    await asyncio.sleep(1)
-
-    atk_s6      = DDoSAttacker("ATK:s6", "public-facing", gen6, intensity_multiplier=15.0, rng_seed=48)
-    atk_s6_task = asyncio.create_task(atk_s6.launch(8))
-    await asyncio.sleep(8 + VOTE_WINDOW + 1.0)
-    await asyncio.gather(atk_s6_task, return_exceptions=True)
-    gen6.stop(); gen6_task.cancel()
-    await asyncio.gather(gen6_task, return_exceptions=True)
-
-    vote_cycle_ms = None
-    if s6_coal_times and s6_res_times:
-        # Measure CFP → resolution only for resolutions that come AFTER the CFP.
-        # THROTTLE fires before any CFP (no coalition), so s6_res_times[0] can be
-        # earlier than s6_coal_times[0]; excluding it gives the true vote duration.
-        first_coal_t = s6_coal_times[0]
-        post_coal_res = [t for t in s6_res_times if t >= first_coal_t]
-        if post_coal_res:
-            vote_cycle_ms = (post_coal_res[0] - first_coal_t) * 1000
-    # Continuous: fraction of 4 s attack window consumed by the vote cycle
-    evasion_s6_cont = min(1.0, (vote_cycle_ms if vote_cycle_ms is not None else VOTE_WINDOW * 1000) / 4000.0)
-
-    _VOTE_BUDGET_MS = VOTE_WINDOW * 1000 + 200   # 300 ms window + 200 ms asyncio buffer
+    r6            = await run_scenario_6()
+    s6_proposals  = r6.extra["proposals"]
+    s6_resolutions = r6.extra["resolutions"]
+    vote_cycle_ms = r6.mttr_ms
+    sw_s6         = r6.sw
 
     suite.check("S6", "Coalition proposal (vote trigger) published during high-severity attack",
-                len(s6_proposals) > 0,
-                observed=f"{len(s6_proposals)} proposals", expected="≥ 1 coalition proposal")
-    suite.check("S6", f"Vote cycle completes within {_VOTE_BUDGET_MS:.0f} ms (VOTE_WINDOW={VOTE_WINDOW}s + asyncio buffer)",
-                vote_cycle_ms is not None and vote_cycle_ms < _VOTE_BUDGET_MS,
+                s6_proposals > 0,
+                observed=f"{s6_proposals} proposals", expected="≥ 1 coalition proposal")
+    suite.check("S6", f"Vote cycle completes within 300 ms (VOTE_WINDOW={VOTE_WINDOW}s)",
+                vote_cycle_ms is not None and vote_cycle_ms < 300,
                 observed=f"{vote_cycle_ms:.0f} ms" if vote_cycle_ms else "no pair",
                 expected=f"< {_VOTE_BUDGET_MS:.0f} ms")
     suite.check("S6", "Action follows majority vote result",
                 len(s6_resolutions) > 0,
                 observed=f"{len(s6_resolutions)} resolution(s)", expected="≥ 1 resolution")
-    sw_s6 = _sw(0.90, 0.90, 0.90 if s6_resolutions else 0.5, 0.85, 0.85)
     suite.check("S6", f"Social Welfare ≥ {MIN_SW}",
                 sw_s6 >= MIN_SW,
                 observed=f"SW ≈ {sw_s6:.3f}", expected=f"≥ {MIN_SW}")
@@ -448,9 +314,8 @@ async def run() -> ValidationSuite:
         "resource": {
             "overhead": {"value": overhead3, "target": 0.40,
                          "passed": overhead3 < 0.40},
-            "grants_s3": len(all_grants3),
-            "efficiency_s3": len([g for g in all_grants3
-                                  if g.get("bid_value", 0) >= 0.70]) / max(len(all_grants3), 1),
+            "grants_s3": all_grants3,
+            "efficiency_s3": len([b for b in granted_bids if b >= 0.70]) / max(all_grants3, 1),
         },
     })
 
