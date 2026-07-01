@@ -375,12 +375,12 @@ async def run_scenario_6(
         if coal_id:
             for t, res in zip(res_times, resolutions):
                 if res.get("incident_id") == coal_id:
-                    vote_cycle_ms = (t - coal_t) * 1000
+                    vote_cycle_ms = max(0.0, (t - coal_t) * 1000)
                     break
         if vote_cycle_ms is None:
             post = [(t, r) for t, r in zip(res_times, resolutions) if t >= coal_t]
             if post:
-                vote_cycle_ms = (post[0][0] - coal_t) * 1000
+                vote_cycle_ms = max(0.0, (post[0][0] - coal_t) * 1000)
 
     sw = _sw(0.90, 0.90, 0.90 if resolutions else 0.5, 0.85, 0.85)
 

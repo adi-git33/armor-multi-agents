@@ -35,7 +35,7 @@ from simulation.clock    import SimClock
 from simulation.network  import NetworkTopology
 from simulation.traffic  import TrafficGenerator
 from simulation.attackers import DDoSAttacker, PortScanner
-from agents.tma  import TrafficMonitorAgent
+from agents.tma  import TrafficMonitorAgent, ALERT_COOLDOWN
 from agents.aca  import AnomalyClassifierAgent
 from agents.rca  import ResponseCoordinatorAgent, VOTE_WINDOW
 from agents.raa  import ResourceAllocatorAgent
@@ -165,21 +165,29 @@ async def run() -> ValidationSuite:
     aca4 = AnomalyClassifierAgent("ACA:s4", bus4)
     await tma4.start(); await aca4.start()
 
-    s4_alerts:      list[dict]  = []
-    s4_reports:     list[dict]  = []
-    s4_alert_times: list[float] = []
+    S4_ATTACK_SEG   = "server"
+    s4_alerts:       list[dict]  = []
+    s4_reports:      list[dict]  = []
+    s4_alert_times:  list[float] = []
+    s4_report_times: list[float] = []
 
-    async def s4_on_alert(msg): s4_alerts.append(msg.content);  s4_alert_times.append(time.monotonic())
-    async def s4_on_rep(msg):   s4_reports.append(msg.content)
+    async def s4_on_alert(msg):
+        s4_alerts.append(msg.content)
+        s4_alert_times.append(time.monotonic())
+
+    async def s4_on_rep(msg):
+        s4_reports.append(msg.content)
+        s4_report_times.append(time.monotonic())
 
     bus4.subscribe(Topic.ALERTS,         s4_on_alert)
     bus4.subscribe(Topic.THREAT_REPORTS, s4_on_rep)
 
     gen4_task = asyncio.create_task(gen4.run())
-    await asyncio.sleep(1)
+    # Warmup + clear TMA segment cooldown so the attack triggers a fresh alert.
+    await asyncio.sleep(1 + ALERT_COOLDOWN)
 
     # No ZeroDayAttacker in codebase — use DDoSAttacker as novel-traffic proxy
-    atk_zd      = DDoSAttacker("ATK:s4", "server", gen4, intensity_multiplier=5.0, rng_seed=46)
+    atk_zd      = DDoSAttacker("ATK:s4", S4_ATTACK_SEG, gen4, intensity_multiplier=5.0, rng_seed=46)
     t_s4        = time.monotonic()
     atk_zd_task = asyncio.create_task(atk_zd.launch(4))
     await asyncio.sleep(4 + 1.0)
@@ -187,19 +195,22 @@ async def run() -> ValidationSuite:
     gen4.stop(); gen4_task.cancel()
     await asyncio.gather(gen4_task, return_exceptions=True)
 
-    novel_detected  = len(s4_alerts) > 0 or len(s4_reports) > 0
-    detect_ms       = (s4_alert_times[0] - t_s4) * 1000 if s4_alert_times else 9999
-    zd_fp           = len([r for r in s4_reports if r.get("classification") not in ("DDOS", "PORT_SCAN", "NOISE", None)])
-    zd_fpr          = zd_fp / max(len(s4_reports), 1)
-    # Continuous: fraction of 4 s attack window before first POST-attack alert.
-    # Filter alert times >= t_s4 to exclude pre-attack warmup noise detections.
-    post_s4_ms = [(t - t_s4) * 1000 for t in s4_alert_times if t >= t_s4]
-    if detect_ms < 0:
-        evasion_s4_cont = 0.0   # first alert before attack start = 0 evasion window
-    elif post_s4_ms:
-        evasion_s4_cont = min(1.0, min(post_s4_ms) / 4000.0)
-    else:
-        evasion_s4_cont = 1.0   # never detected
+    novel_detected = len(s4_alerts) > 0 or len(s4_reports) > 0
+    zd_fp          = len([r for r in s4_reports if r.get("classification") not in ("DDOS", "PORT_SCAN", "NOISE", None)])
+    zd_fpr         = zd_fp / max(len(s4_reports), 1)
+
+    # First detection on the attacked segment after attack start (alert or report).
+    post_detect_ms = [
+        (t - t_s4) * 1000
+        for t, ev in zip(s4_alert_times, s4_alerts)
+        if t >= t_s4 and ev.get("segment") == S4_ATTACK_SEG
+    ] + [
+        (t - t_s4) * 1000
+        for t, ev in zip(s4_report_times, s4_reports)
+        if t >= t_s4 and ev.get("segment") == S4_ATTACK_SEG
+    ]
+    detect_ms = min(post_detect_ms) if post_detect_ms else 9999
+    evasion_s4_cont = min(1.0, detect_ms / 4000.0) if post_detect_ms else 1.0
 
     suite.check("S4", "Novel attack detected via baseline deviation",
                 novel_detected,
@@ -275,7 +286,7 @@ async def run() -> ValidationSuite:
     r6            = await run_scenario_6()
     s6_proposals  = r6.extra["proposals"]
     s6_resolutions = r6.extra["resolutions"]
-    vote_cycle_ms = r6.mttr_ms
+    vote_cycle_ms = r6.extra.get("vote_cycle_ms", r6.mttr_ms)
     sw_s6         = r6.sw
     evasion_s6_cont = min(
         1.0,
