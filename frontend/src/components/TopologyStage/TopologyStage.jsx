@@ -167,12 +167,15 @@ function TopologyStage({
         </LabelGroup>
 
         {(() => {
-          const tma = agents["TMA:1"];
+          // Each segment has its own TMA agent — show the one for whichever
+          // segment is currently selected/viewed.
+          const tmaId = `TMA:${selectedSeg}`;
+          const tma = agents[tmaId];
           const sc2 = stateColor(tma?.state || "mon");
           return (
             <TmaChip
-              onClick={() => setSelAgent(selAgent === "TMA:1" ? null : "TMA:1")}
-              selected={selAgent === "TMA:1" ? 1 : 0}
+              onClick={() => setSelAgent(selAgent === tmaId ? null : tmaId)}
+              selected={selAgent === tmaId ? 1 : 0}
             >
               <TmaIconWrap iconbg={`${sc2}18`}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={sc2} strokeWidth="1.8">
@@ -181,7 +184,7 @@ function TopologyStage({
                 </svg>
               </TmaIconWrap>
               <HostInfo>
-                <HostTitle>TMA-1</HostTitle>
+                <HostTitle>{tma?.code || "TMA"}</HostTitle>
                 <HostMeta>Traffic Monitor · SPAN</HostMeta>
               </HostInfo>
             </TmaChip>

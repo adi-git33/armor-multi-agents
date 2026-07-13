@@ -56,9 +56,20 @@ class TrafficMonitorAgent(BaseAgent):
         agent_id:  str,
         bus:       MessageBus,
         generator: TrafficGenerator,
+        segment_id: str | None = None,
     ) -> None:
+        """
+        segment_id=None (default) monitors every segment in one instance —
+        this is what the validation suite always uses. The live server
+        instead gives each network its own TMA (one instance per segment_id,
+        see SimEngine.start()), so this filters _on_sample to just that
+        segment; every other segment's traffic is ignored by this instance.
+        """
         super().__init__(agent_id, bus)
         self._gen = generator
+        self._segment_id = segment_id
+
+        seg_ids = [segment_id] if segment_id else generator.topology.segment_ids()
 
         # BDI Beliefs: volume state per segment
         self._beliefs: dict[str, dict] = {
@@ -67,17 +78,17 @@ class TrafficMonitorAgent(BaseAgent):
                 "last_alert_time": 0.0,
                 "alert_count":     0,
             }
-            for sid in generator.topology.segment_ids()
+            for sid in seg_ids
         }
 
         # BDI Beliefs: port tracker
         # Structure: { segment: { src_ip: { dst_port: last_seen_time } } }
         self._port_tracker: dict[str, dict[str, dict[int, float]]] = {
-            sid: defaultdict(dict) for sid in generator.topology.segment_ids()
+            sid: defaultdict(dict) for sid in seg_ids
         }
         # When each src_ip was first seen (for growth-rate computation)
         self._first_seen: dict[str, dict[str, float]] = {
-            sid: {} for sid in generator.topology.segment_ids()
+            sid: {} for sid in seg_ids
         }
         # Cooldown per (segment, src_ip) pair
         self._scan_alerted: dict[tuple, float] = {}
@@ -89,7 +100,7 @@ class TrafficMonitorAgent(BaseAgent):
     async def start(self) -> None:
         await super().start()
         self._gen.on_sample(self._on_sample)
-        logger.info("[%s] monitoring %d segments (volume + port-scan)",
+        logger.info("[%s] monitoring %d segment(s) (volume + port-scan)",
                     self.agent_id, len(self._beliefs))
 
     # ------------------------------------------------------------------
@@ -98,6 +109,8 @@ class TrafficMonitorAgent(BaseAgent):
 
     async def _on_sample(self, sample: TrafficSample) -> None:
         if not self._running:
+            return
+        if self._segment_id is not None and sample.segment != self._segment_id:
             return
         await self._check_volume(sample)
         await self._check_port_scan(sample)

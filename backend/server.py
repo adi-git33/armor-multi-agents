@@ -49,6 +49,24 @@ logger = logging.getLogger(__name__)
 
 FRONTEND = pathlib.Path(__file__).parent / "frontend" / "index.html"
 
+# ACA's cumulative detection confusion matrix (tp/fp/fn/tn) persists here
+# across backend restarts — see StateCollector._load_aca_metrics/_save_aca_metrics.
+# Bootstrap a starting value with `python scripts/seed_aca_metrics.py`.
+ACA_METRICS_PATH = pathlib.Path(__file__).parent / "models" / "aca_metrics.json"
+
+
+def _load_aca_metrics() -> dict:
+    try:
+        data = json.loads(ACA_METRICS_PATH.read_text())
+        return {k: int(data.get(k, 0)) for k in ("tp", "fp", "fn", "tn")}
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
+
+
+def _save_aca_metrics(tp: int, fp: int, fn: int, tn: int) -> None:
+    ACA_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ACA_METRICS_PATH.write_text(json.dumps({"tp": tp, "fp": fp, "fn": fn, "tn": tn}))
+
 # ── Segment + scenario metadata ────────────────────────────────────────────────
 SEGMENTS = [
     {"id": "public-facing", "code": "PUB", "name": "Public-Facing Services", "cidr": "172.16.0.0/24"},
@@ -57,6 +75,21 @@ SEGMENTS = [
     {"id": "sec-mon",       "code": "MON", "name": "Security Monitoring Zone","cidr": "10.0.3.0/24"},
 ]
 SEG_MAP = {s["id"]: s for s in SEGMENTS}
+
+# One TMA agent per network segment — each only watches its own segment's
+# traffic (see agents/tma.py's segment_id filter). Every other MAS agent
+# is a single process-wide instance.
+TMA_DEFS = [
+    (f"TMA:{s['id']}", "TMA", f"TMA-{s['code']}", "Traffic Monitor",
+     "Traffic Monitor Agent", s["name"])
+    for s in SEGMENTS
+]
+AGENT_DEFS = TMA_DEFS + [
+    ("ACA:1", "ACA", "ACA-1", "Anomaly Classifier",   "Anomaly Classifier Agent",   "All Segments"),
+    ("TIA:1", "TIA", "TIA-1", "Threat Intelligence",  "Threat Intelligence Agent",  "Global"),
+    ("RCA:1", "RCA", "RCA-1", "Response Coordinator", "Response Coordinator Agent", "Global"),
+    ("RAA:1", "RAA", "RAA-1", "Resource Allocator",   "Resource Allocator Agent",   "Global"),
+]
 
 SCENARIOS = {
     "calm":  {"label": "Calm Baseline"},
@@ -133,9 +166,23 @@ class StateCollector:
         # quarantine decisions here can actually cut off segment traffic.
         self.gen: "TrafficGenerator | None" = None
 
-        # Metric counters
-        self.tp = 0   # confirmed threats classified
-        self.fp = 0   # noise/benign classified as threat
+        # Metric counters — a real confusion matrix against active_attacks
+        # (ground truth), not just ACA's self-reported classification.
+        # Loaded from disk (ACA_METRICS_PATH) so accuracy accumulates across
+        # backend restarts instead of resetting to zero every launch; see
+        # _load_aca_metrics/_save_aca_metrics and scripts/seed_aca_metrics.py.
+        _m = _load_aca_metrics()
+        self.tp = _m["tp"]   # real attack, correctly flagged as a threat
+        self.fp = _m["fp"]   # no real attack, but flagged as a threat anyway
+        self.fn = _m["fn"]   # real attack, missed (classified as NOISE)
+        self.tn = _m["tn"]   # no real attack, correctly classified as NOISE
+
+        # Ground truth: segment_id -> "DDOS" | "PORT_SCAN" for whichever
+        # segment SimEngine.set_scenario() is actually attacking right now.
+        # Set/cleared by set_scenario(); untouched by quarantine (the
+        # attacker keeps running even while its traffic is blocked).
+        self.active_attacks: dict[str, str] = {}
+
         self.mttr_ms: list[float] = []
         self._disruption_start: float | None = None
         self.disruption_secs = 0.0
@@ -248,10 +295,10 @@ class StateCollector:
         self._pkt_seq += 1
         self.packet_log.append({
             "id":       self._pkt_seq,
-            # Absolute monotonic clock, not elapsed() — packet_log now
-            # survives scenario resets (which rebase elapsed() to 0), so
-            # timestamps here must stay comparable across that boundary
-            # for the frontend's "last N seconds" recency filtering.
+            # Absolute monotonic clock, not elapsed() — packet_log is a
+            # session-wide running record, so timestamps here must stay
+            # on one continuous clock for the frontend's "last N seconds"
+            # recency filtering to work.
             "t":        round(time.monotonic(), 3),
             "kind":     kind,               # "legit" | "attack"
             "src_ip":   pkt.src_ip,
@@ -322,41 +369,52 @@ class StateCollector:
         atype = c.get("anomaly_type", "")
         dev   = c.get("deviation", 0.0)
         name  = SEG_MAP.get(seg, {}).get("name", seg)
+        # One TMA per segment now — attribute state/log entries to the TMA
+        # that actually sent this (e.g. "TMA:server"), not a fixed "TMA:1".
+        sender      = msg.sender
+        sender_code = f"TMA-{SEG_MAP.get(seg, {}).get('code', seg)}"
 
-        self.ag_state["TMA:1"] = "alert"
-        self.ag_task["TMA:1"]  = f"anomaly on {name}"
-        self._trace("TMA:1", f"{atype} on {name} ({dev:+.1f}σ)")
-        self._log("TMA-1", "#d9a23f",
+        self.ag_state[sender] = "alert"
+        self.ag_task[sender]  = f"anomaly on {name}"
+        self._trace(sender, f"{atype} on {name} ({dev:+.1f}σ)")
+        self._log(sender_code, "#d9a23f",
                   f"Alert — {atype.lower().replace('_', ' ')} on {name} ({dev:+.1f}σ)",
                   perf=msg.performative.value)
 
     async def _on_threat_report(self, msg: Message):
         self._emit_viz_event(msg)
         c    = msg.content
-        clf  = c.get("classification", "")
+        clf  = c.get("classification", "")   # "NOISE" | "DDOS" | "PORT_SCAN"
         sev  = c.get("severity", 0.0)
         seg  = c.get("segment", "")
         conf = c.get("confidence", 0.0)
         atk  = c.get("attack_type", clf)
         name = SEG_MAP.get(seg, {}).get("name", seg)
 
-        if clf == "CONFIRMED_THREAT":
-            self.tp += 1
+        # Ground truth for this segment right now (set by SimEngine.set_scenario()) —
+        # lets tp/fp/fn/tn reflect whether ACA's call was actually correct,
+        # not just what string it happened to publish.
+        under_attack = seg in self.active_attacks
+
+        if clf == "NOISE":
+            if under_attack:
+                self.fn += 1   # a real attack, missed
+            else:
+                self.tn += 1   # correctly quiet
+        else:
+            if under_attack:
+                self.tp += 1
+            else:
+                self.fp += 1
+
             self.ag_state["ACA:1"] = "active"
             self.ag_task["ACA:1"]  = f"classifying · severity {sev:.2f}"
             self._trace("ACA:1", f"Confirmed {atk} — sev {sev:.2f}, conf {conf:.0%}")
             self._log("ACA-1", "#cf6b5e",
                       f"Confirmed threat: {atk} on {name}, severity {sev:.2f}",
                       perf=msg.performative.value)
-        elif clf == "SUSPICIOUS":
-            self.ag_state["ACA:1"] = "active"
-            self.ag_task["ACA:1"]  = f"suspicious on {name}"
-            self._trace("ACA:1", f"Suspicious on {name} (conf {conf:.0%})")
-            self._log("ACA-1", "#d9a23f",
-                      f"Suspicious pattern on {name} (confidence {conf:.0%})",
-                      perf=msg.performative.value)
-        else:
-            self.fp += 1
+
+        _save_aca_metrics(self.tp, self.fp, self.fn, self.tn)
 
     async def _on_threat_intel(self, msg: Message):
         self._emit_viz_event(msg)
@@ -538,36 +596,42 @@ class StateCollector:
                       perf=msg.performative.value)
 
     # ------------------------------------------------------------------
-    # Reset (called on scenario change)
+    # Reset (called when one segment's scenario changes)
     # ------------------------------------------------------------------
 
-    def reset(self):
+    def reset_segment(self, segment_id: str):
         """
-        Called on every scenario switch. Deliberately does NOT clear
-        self.logs, self.ballots/resolved_ballots, or self.packet_log —
-        the activity log, coalition-vote history, and packet stream are a
-        running record across scenarios, not scenario-scoped state. (Their
-        id counters — self.lamport, self._pkt_seq — are also left alone so
-        ids already sent to clients stay unique and never repeat.)
+        Called by SimEngine.set_scenario() when segment_id's attacker
+        changes. Clears only state that belongs to THIS segment — other
+        segments can be mid-attack or quarantined at the same time and
+        must not be disturbed. (self.active_attacks isn't touched here:
+        SimEngine sets/clears that entry itself right after this call,
+        to whatever the new scenario for this segment actually is.)
+
+        Left alone deliberately, same reasoning as before but now simply
+        because it's session-wide, not segment-scoped: self.logs,
+        self.tp/fp/fn/tn, self.mttr_ms, self.blocked_ips (not attributable
+        to one segment), and agent display state (agents are global
+        singletons that may legitimately be busy with a different segment).
         """
-        self._start = time.monotonic()
-        self.viz_events.clear()
-        self._viz_seq = 0
-        self.tp = self.fp = 0
-        self.mttr_ms.clear()
-        self._disruption_start = None
-        self.disruption_secs = 0.0
-        self.blocked_ips.clear()
-        if self.gen:
-            for sid in self.quarantined_segs:
-                self.gen.unquarantine(sid)
-        self.quarantined_segs.clear()
-        self.active_incidents.clear()
-        self._pkt_tick.clear()
-        for aid in list(self.ag_state):
-            self.ag_state[aid] = "mon"
-            self.ag_task[aid]  = "watching traffic"
-            self.ag_trace.get(aid, deque()).clear()
+        if self.gen and segment_id in self.quarantined_segs:
+            self.gen.unquarantine(segment_id)
+        self.quarantined_segs.discard(segment_id)
+
+        self.active_incidents = {
+            k: v for k, v in self.active_incidents.items() if v.get("seg") != segment_id
+        }
+        self.ballots = {
+            k: v for k, v in self.ballots.items() if v.get("segment") != segment_id
+        }
+        self._pkt_tick.pop(f"legit:{segment_id}", None)
+        self._pkt_tick.pop(f"ddos:{segment_id}", None)
+
+        # Availability tracks "is ANY segment currently disrupted" — if this
+        # was the last quarantined segment, stop the disruption clock too.
+        if self._disruption_start is not None and not self.quarantined_segs:
+            self.disruption_secs += time.monotonic() - self._disruption_start
+            self._disruption_start = None
 
     # ------------------------------------------------------------------
     # Metrics calculation
@@ -576,9 +640,11 @@ class StateCollector:
     def metrics(self) -> dict:
         el = max(1.0, self.elapsed())
 
-        total_detected = self.tp + self.fp
-        dr  = self.tp / max(1, self.tp + self.fp) if total_detected > 0 else 0.0
-        fpr = self.fp / max(1, total_detected) * 0.35  # scaled to be realistic
+        # Standard confusion-matrix rates against ground truth (active_attacks):
+        # DR (recall)  = real attacks correctly caught / all real attacks
+        # FPR          = calm moments wrongly flagged / all calm moments
+        dr  = self.tp / max(1, self.tp + self.fn)
+        fpr = self.fp / max(1, self.fp + self.tn)
 
         mttr = (sum(self.mttr_ms) / len(self.mttr_ms)) if self.mttr_ms else 0.0
 
@@ -611,7 +677,7 @@ class StateCollector:
     # Full snapshot for WebSocket push
     # ------------------------------------------------------------------
 
-    def snapshot(self, gen: "TrafficGenerator", scenario: str, running: bool) -> dict:
+    def snapshot(self, gen: "TrafficGenerator", segment_scenarios: dict[str, str], running: bool) -> dict:
         """Assemble the JSON object sent to every connected browser."""
 
         # ── Segments ──────────────────────────────────────────────────
@@ -641,6 +707,7 @@ class StateCollector:
             segs_out[sid] = {
                 **s,
                 "state":       health,
+                "scenario":    segment_scenarios.get(sid, "calm"),
                 "pps":         round(pps, 1),
                 "baseline":    round(stats.baseline_mean, 1),
                 "deviation":   round(dev, 2),
@@ -654,13 +721,6 @@ class StateCollector:
             }
 
         # ── Agents ────────────────────────────────────────────────────
-        AGENT_DEFS = [
-            ("TMA:1", "TMA", "TMA-1", "Traffic Monitor",   "Traffic Monitor Agent",  "All Segments"),
-            ("ACA:1", "ACA", "ACA-1", "Anomaly Classifier","Anomaly Classifier Agent","All Segments"),
-            ("TIA:1", "TIA", "TIA-1", "Threat Intelligence","Threat Intelligence Agent","Global"),
-            ("RCA:1", "RCA", "RCA-1", "Response Coordinator","Response Coordinator Agent","Global"),
-            ("RAA:1", "RAA", "RAA-1", "Resource Allocator","Resource Allocator Agent","Global"),
-        ]
         BUDGET = {"TMA": 100, "ACA": 200, "TIA": 1000, "RCA": 500, "RAA": 300}
         agents_out = {}
         m = self.metrics()
@@ -694,7 +754,6 @@ class StateCollector:
 
         return {
             "t":                round(self.elapsed(), 1),
-            "scenario":         scenario,
             "running":          running,
             "segments":         segs_out,
             "agents":           agents_out,
@@ -718,17 +777,21 @@ def _build_beliefs(aid: str, atype: str, gen: "TrafficGenerator",
     beliefs = []
 
     if atype == "TMA":
-        for s in SEGMENTS:
+        # One TMA per segment now — aid is "TMA:<segment_id>", so only
+        # show beliefs for the one segment this instance actually watches.
+        seg_id = aid.split(":", 1)[1] if ":" in aid else None
+        s = SEG_MAP.get(seg_id)
+        if s:
             st  = gen.get_stats(s["id"])
             dev = st.deviation
-            beliefs.append({"k": f"{s['code']} baseline",
+            beliefs.append({"k": "segment", "v": s["name"], "vColor": B})
+            beliefs.append({"k": "baseline",
                              "v": f"{st.baseline_mean:.0f} ± {st.baseline_std:.0f} pps",
                              "vColor": B})
-            if abs(dev) >= 2:
-                beliefs.append({"k": f"{s['code']} deviation",
-                                 "v": f"{dev:+.1f}σ",
-                                 "vColor": R if abs(dev) >= 4 else A})
-        beliefs.append({"k": "last_alert_time", "v": "tracked per-segment", "vColor": B})
+            beliefs.append({"k": "deviation",
+                             "v": f"{dev:+.1f}σ",
+                             "vColor": R if abs(dev) >= 4 else (A if abs(dev) >= 2 else G)})
+        beliefs.append({"k": "last_alert_time", "v": "tracked for this segment", "vColor": B})
         beliefs.append({"k": "resource_available", "v": "True", "vColor": G})
 
     elif atype == "ACA":
@@ -783,7 +846,10 @@ class SimEngine:
     """
 
     def __init__(self):
-        self.scenario = "calm"
+        # Per-segment scenario state — segments are independent, so each
+        # tracks its own attacker: two segments can be under different
+        # attacks (or one attacked while another sits quarantined) at once.
+        self.segment_scenarios: dict[str, str] = {}
         self.running  = True
 
         # Core MAS components (set in start())
@@ -791,7 +857,7 @@ class SimEngine:
         self.clock: SimClock | None       = None
         self.topo:  NetworkTopology | None = None
         self.gen:   TrafficGenerator | None = None
-        self.tma:   TrafficMonitorAgent | None = None
+        self.tma_by_seg: dict[str, TrafficMonitorAgent] = {}   # one TMA per segment
         self.aca:   AnomalyClassifierAgent | None = None
         self.rca:   ResponseCoordinatorAgent | None = None
         self.tia:   ThreatIntelligenceAgent | None = None
@@ -800,7 +866,7 @@ class SimEngine:
 
         # Background asyncio tasks
         self._gen_task: asyncio.Task | None = None
-        self._atk_tasks: list[asyncio.Task] = []
+        self._atk_tasks: dict[str, asyncio.Task] = {}   # segment_id -> attacker task
 
     async def start(self):
         """Initialise the MAS and start background tasks."""
@@ -809,10 +875,16 @@ class SimEngine:
         self.topo  = NetworkTopology()
         self.gen   = TrafficGenerator(self.topo, self.clock)
         self.sc.gen = self.gen
+        self.segment_scenarios = {sid: "calm" for sid in self.topo.segment_ids()}
         await self.bus.start()
 
-        # Agents
-        self.tma = TrafficMonitorAgent("TMA:1", self.bus, self.gen)
+        # Agents — one TMA per segment (each only watches its own segment's
+        # traffic; see agents/tma.py's segment_id filter). Every other agent
+        # is a single process-wide instance.
+        self.tma_by_seg = {
+            sid: TrafficMonitorAgent(f"TMA:{sid}", self.bus, self.gen, segment_id=sid)
+            for sid in self.topo.segment_ids()
+        }
         self.aca = AnomalyClassifierAgent("ACA:1", self.bus)
 
         def _segment_is_normal(seg: str) -> bool:
@@ -827,13 +899,13 @@ class SimEngine:
         self.raa = ResourceAllocatorAgent("RAA:1", self.bus)
 
         # Start agents
-        for agent in [self.tma, self.aca, self.rca, self.tia, self.raa]:
+        for agent in [*self.tma_by_seg.values(), self.aca, self.rca, self.tia, self.raa]:
             await agent.start()
 
         # State collector observes the bus
         self.sc.init(
             list(self.topo.segment_ids()),
-            ["TMA:1", "ACA:1", "TIA:1", "RCA:1", "RAA:1"],
+            [aid for aid, *_ in AGENT_DEFS],
         )
         self.sc.subscribe(self.bus)
 
@@ -857,12 +929,12 @@ class SimEngine:
         logger.info("SimEngine started")
 
     async def stop(self):
-        self._stop_attackers()
+        self._stop_all_attackers()
         if self.gen:
             self.gen.stop()
         if self._gen_task:
             self._gen_task.cancel()
-        for agent in [self.tma, self.aca, self.rca, self.tia, self.raa]:
+        for agent in [*self.tma_by_seg.values(), self.aca, self.rca, self.tia, self.raa]:
             if agent:
                 await agent.stop()
         if self.bus:
@@ -873,43 +945,57 @@ class SimEngine:
     # Scenario control
     # ------------------------------------------------------------------
 
-    def _stop_attackers(self):
-        for t in self._atk_tasks:
-            t.cancel()
+    def _stop_attacker(self, segment_id: str) -> None:
+        """Stop just this segment's attacker, leaving every other
+        segment's attacker (and quarantine/incident state) untouched."""
+        task = self._atk_tasks.pop(segment_id, None)
+        if task:
+            task.cancel()
+
+    def _stop_all_attackers(self) -> None:
+        for task in self._atk_tasks.values():
+            task.cancel()
         self._atk_tasks.clear()
 
     async def set_scenario(self, name: str, segment: str | None = None):
-        """Switch to a new scenario: stop current attackers, start new ones
-        targeting `segment` (falls back to a sensible default per scenario
-        if `segment` is missing or not a real segment id)."""
+        """Set the scenario for ONE segment (falls back to a sensible
+        default target per scenario if `segment` is missing or not a real
+        segment id). Segments are independent — this never stops or resets
+        any other segment's attacker, quarantine, or incidents, so multiple
+        segments can be under different attacks (or quarantined) at once."""
         if name not in SCENARIOS:
             name = "calm"
 
         valid_segments = self.gen.topology.segment_ids()
+        default_target = "public-facing" if name != "scan" else "server"
+        target = segment if segment in valid_segments else default_target
 
-        self._stop_attackers()
-        self.sc.reset()
-        self.scenario = name
+        self._stop_attacker(target)
+        self.sc.reset_segment(target)
+        self.segment_scenarios[target] = name
 
         if name == "ddos":
-            target = segment if segment in valid_segments else "public-facing"
             atk = DDoSAttacker(
-                "DDoS:1", target, self.gen,
+                f"DDoS:{target}", target, self.gen,
                 intensity_multiplier=6.0, ramp_seconds=3.0,
             )
-            self._atk_tasks.append(asyncio.create_task(atk.launch(duration=3600)))
+            self._atk_tasks[target] = asyncio.create_task(atk.launch(duration=3600))
+            self.sc.active_attacks[target] = "DDOS"
 
         elif name == "scan":
-            target = segment if segment in valid_segments else "server"
             scanner = PortScanner(
-                "Scan:1", target, self.gen,
+                f"Scan:{target}", target, self.gen,
                 src_ip="45.33.32.156", probe_interval=0.3,
             )
-            self._atk_tasks.append(asyncio.create_task(scanner.launch(duration=3600)))
-        # "calm" → no attackers, already stopped above
+            self._atk_tasks[target] = asyncio.create_task(scanner.launch(duration=3600))
+            self.sc.active_attacks[target] = "PORT_SCAN"
+        else:
+            # "calm" → attacker already stopped above; this segment has no
+            # active ground-truth attack anymore.
+            self.sc.active_attacks.pop(target, None)
 
     def snapshot(self) -> dict:
-        return self.sc.snapshot(self.gen, self.scenario, self.running)
+        return self.sc.snapshot(self.gen, self.segment_scenarios, self.running)
 
 
 # ── FastAPI application ────────────────────────────────────────────────────────

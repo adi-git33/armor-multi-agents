@@ -2,8 +2,14 @@ import { useEffect, useRef } from "react";
 import { C, POS } from "../dashboard/constants";
 import { lerp } from "../dashboard/utils";
 
+// One TMA agent per segment now (TMA:<segment_id>) — they all render at
+// the same "tma" screen position, since the topology view only ever shows
+// whichever segment's TMA corresponds to the currently selected network.
 const SENDER_NODE = {
-  "TMA:1": "tma",
+  "TMA:public-facing": "tma",
+  "TMA:server":        "tma",
+  "TMA:internal":       "tma",
+  "TMA:sec-mon":        "tma",
   "ACA:1": "aca1",
   "TIA:1": "tia1",
   "RCA:1": "rca1",

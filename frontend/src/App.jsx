@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import "./App.css";
 import AgentInspector from "./components/AgentInspector/AgentInspector";
 import ConnectionBanner from "./components/ConnectionBanner/ConnectionBanner";
@@ -24,26 +24,16 @@ function App() {
   const ballots = state?.ballots || { open: [], resolved: [] };
   const packets = state?.packets || [];
   const metrics = state?.metrics || { dr: 0, fpr: 0, mttr: 0, availability: 0, sw: 0 };
-  const scenario = state?.scenario || "calm";
   const elapsed = state?.t || 0;
   const segMap = Object.fromEntries(segs.map((s) => [s.id, s]));
 
   const activeSegId = segMap[selectedSeg] ? selectedSeg : segs[0]?.id;
   const selectedSegData = (activeSegId && segMap[activeSegId]) || segs[0] || {};
+  // Each segment tracks its own scenario independently — switching which
+  // network you're viewing never starts/stops/resets anything, it just
+  // changes what you're looking at.
+  const scenario = selectedSegData.scenario || "calm";
   const scenarioAtk = ["ddos", "scan"].includes(scenario);
-
-  // Switching the selected network while an attack scenario is running
-  // should redirect that attack to the newly selected segment, not just
-  // change which segment is displayed.
-  const handleSetSelectedSeg = useCallback(
-    (segId) => {
-      setSelSeg(segId);
-      if (scenario !== "calm") {
-        sendScenario(scenario, segId);
-      }
-    },
-    [scenario, sendScenario]
-  );
 
   const links = useMemo(() => {
     const hostSlotKeys = ["A", "B", "C", "D", "E"].slice(0, Math.min(5, selectedSegData?.hosts?.length || 0));
@@ -67,7 +57,7 @@ function App() {
     <div className="dashboard-app">
       <ConnectionBanner connected={connected} />
 
-      <SegmentCards segments={segs} selectedSeg={activeSegId || selectedSeg} setSelectedSeg={handleSetSelectedSeg} segMap={segMap} />
+      <SegmentCards segments={segs} selectedSeg={activeSegId || selectedSeg} setSelectedSeg={setSelSeg} segMap={segMap} />
 
       <ScenarioMetricsBar
         scenario={scenario}
@@ -94,7 +84,7 @@ function App() {
           segments={segs}
           segMap={segMap}
           selectedSeg={activeSegId || selectedSeg}
-          setSelectedSeg={handleSetSelectedSeg}
+          setSelectedSeg={setSelSeg}
           logs={logs}
           ballots={ballots}
           packets={packets}
