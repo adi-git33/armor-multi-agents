@@ -51,6 +51,10 @@ class TrafficGenerator:
 
         self._callbacks: list[SampleCallback] = []
 
+        # Segments cut off by RCA — no pps, overlay, or packets flow
+        # through a quarantined segment until it's released.
+        self._quarantined: set[str] = set()
+
         # Attack overlays: {segment_id: {attacker_id: extra_pps}}
         # Multiple attackers can target the same segment; their pps stacks.
         self._attack_overlays: dict[str, dict[str, float]] = {
@@ -64,6 +68,13 @@ class TrafficGenerator:
             sid: [] for sid in topology.segment_ids()
         }
 
+        # Separate, non-destructive mirror of the same deposits — for
+        # observers (e.g. the visualization layer) that must not compete
+        # with the TMA's own drain_attack_packets() consumption above.
+        self._attack_packets_peek: dict[str, list] = {
+            sid: [] for sid in topology.segment_ids()
+        }
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -71,6 +82,21 @@ class TrafficGenerator:
     @property
     def topology(self) -> NetworkTopology:
         return self._topology
+
+    def quarantine(self, segment_id: str) -> None:
+        """Cut a segment off from the network: the broadcast pps (and every
+        derived display/packet feed) drops to 0 while quarantined. The
+        rolling stats window keeps recording real underlying traffic the
+        whole time — like a SPAN port that mirrors the wire regardless of
+        an ACL drop — so get_stats() stays an accurate, real-time read of
+        whether the segment is still under attack. That's what lets a
+        caller (RCA's auto-release check) poll "has this gone quiet yet?"
+        while still blocked, instead of only finding out after unblocking."""
+        self._quarantined.add(segment_id)
+
+    def unquarantine(self, segment_id: str) -> None:
+        """Restore normal traffic flow to a previously quarantined segment."""
+        self._quarantined.discard(segment_id)
 
     def add_attack_traffic(
         self, segment_id: str, attacker_id: str, extra_pps: float
@@ -84,17 +110,31 @@ class TrafficGenerator:
 
     def get_attack_pps(self, segment_id: str) -> float:
         """Total extra pps currently injected into a segment by all attackers."""
+        if segment_id in self._quarantined:
+            return 0.0
         return sum(self._attack_overlays[segment_id].values())
 
     def add_attack_packets(self, segment_id: str, packets: list) -> None:
         """Attackers call this to deposit individual probe packets for TMA inspection."""
         self._attack_packets[segment_id].extend(packets)
+        self._attack_packets_peek[segment_id].extend(packets)
 
     def drain_attack_packets(self, segment_id: str) -> list:
         """TMA calls this each tick to collect and clear new attack packets."""
         packets = self._attack_packets[segment_id][:]
         self._attack_packets[segment_id].clear()
-        return packets
+        return [] if segment_id in self._quarantined else packets
+
+    def peek_attack_packets(self, segment_id: str) -> list:
+        """
+        Non-destructive-to-TMA read of recently deposited attack packets, for
+        visualization/observer use. Each packet is returned exactly once —
+        this call clears its own private mirror, but never touches the
+        buffer drain_attack_packets() draws from.
+        """
+        packets = self._attack_packets_peek[segment_id][:]
+        self._attack_packets_peek[segment_id].clear()
+        return [] if segment_id in self._quarantined else packets
 
     def on_sample(self, cb: SampleCallback) -> None:
         """Register an async callback invoked on every new TrafficSample."""
@@ -165,9 +205,14 @@ class TrafficGenerator:
 
     async def _segment_loop(self, seg: NetworkSegment) -> None:
         while self._running:
-            overlay = sum(self._attack_overlays[seg.segment_id].values())
-            pps     = self._draw_pps(seg) + overlay
-            self._windows[seg.segment_id].append(pps)
+            overlay  = sum(self._attack_overlays[seg.segment_id].values())
+            real_pps = self._draw_pps(seg) + overlay
+            # Always record the real reading — see quarantine()'s docstring
+            # for why the window must stay live even while blocked.
+            self._windows[seg.segment_id].append(real_pps)
+
+            quarantined = seg.segment_id in self._quarantined
+            pps = 0.0 if quarantined else real_pps
 
             sample = TrafficSample(
                 segment=seg.segment_id,
@@ -192,6 +237,9 @@ class TrafficGenerator:
         registry traffic patterns.  Each packet reflects a real src/dst
         host pair and service port — used by agents from Part 2 onward.
         """
+        if seg.segment_id in self._quarantined:
+            return []
+
         patterns = self._topology.registry.patterns_for(seg.segment_id)
         if not patterns:
             return []

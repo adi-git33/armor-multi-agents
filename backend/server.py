@@ -36,12 +36,13 @@ from simulation.clock import SimClock
 from simulation.network import NetworkTopology
 from simulation.traffic import TrafficGenerator
 from simulation.attackers import DDoSAttacker, PortScanner
-from agents.tma import TrafficMonitorAgent
+from agents.tma import TrafficMonitorAgent, ANOMALY_THRESHOLD
 from agents.aca import AnomalyClassifierAgent
 from agents.rca import ResponseCoordinatorAgent
 from agents.tia import ThreatIntelligenceAgent
 from agents.raa import ResourceAllocatorAgent
 from core.messages import Topic, Message
+from core.models import Packet
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -128,6 +129,10 @@ class StateCollector:
         self.viz_events: deque = deque(maxlen=400)
         self._viz_seq = 0
 
+        # Set by SimEngine.start() once the traffic generator exists, so
+        # quarantine decisions here can actually cut off segment traffic.
+        self.gen: "TrafficGenerator | None" = None
+
         # Metric counters
         self.tp = 0   # confirmed threats classified
         self.fp = 0   # noise/benign classified as threat
@@ -147,8 +152,22 @@ class StateCollector:
         # Active coalition incidents (incident_id → metadata)
         self.active_incidents: dict[str, dict] = {}
 
+        # Live coalition voting — open ballots (incident_id → ballot) and a
+        # short buffer of just-resolved ones so the UI can show the final
+        # tally for a beat before it disappears.
+        self.ballots: dict[str, dict] = {}
+        self.resolved_ballots: deque = deque(maxlen=5)
+
         # Per-segment bandwidth history (70 samples ≈ same as mockup)
         self.bw_hist: dict[str, deque] = {}
+
+        # Sampled real packets (legit + attacker) — capped, not exhaustive.
+        # At real traffic rates (100s-1000s pps) we cannot stream every
+        # packet over a 200ms-tick WebSocket; this is a rate-limited,
+        # representative sample, clearly labeled as such in the UI.
+        self.packet_log: deque = deque(maxlen=150)
+        self._pkt_seq = 0
+        self._pkt_tick: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Init
@@ -167,6 +186,7 @@ class StateCollector:
         bus.subscribe(Topic.THREAT_REPORTS,  self._on_threat_report)
         bus.subscribe(Topic.THREAT_INTEL,    self._on_threat_intel)
         bus.subscribe(Topic.COALITION,       self._on_coalition)
+        bus.subscribe(Topic.VOTES,           self._on_vote)
         bus.subscribe(Topic.RESOLUTION,      self._on_resolution)
         bus.subscribe(Topic.RESOURCE_GRANTS, self._on_grant)
 
@@ -182,10 +202,11 @@ class StateCollector:
     def elapsed(self) -> float:
         return time.monotonic() - self._start
 
-    def _log(self, agent: str, color: str, text: str):
+    def _log(self, agent: str, color: str, text: str, perf: str = ""):
         self.lamport += 1
         self.logs.appendleft({"id": self.lamport, "time": self._now(),
-                               "agent": agent, "color": color, "text": text})
+                               "agent": agent, "color": color, "text": text,
+                               "perf": perf})
 
     def _trace(self, aid: str, text: str):
         self.ag_trace.setdefault(aid, deque(maxlen=15)).appendleft(
@@ -203,6 +224,9 @@ class StateCollector:
         self._viz_seq += 1
         self.viz_events.append({
             "id": self._viz_seq,
+            "performative": msg.performative.value,
+            "msg_id": msg.msg_id,
+            "conversation_id": msg.conversation_id,
             "topic": msg.topic,
             "sender": msg.sender,
             "receiver": msg.receiver,
@@ -215,6 +239,77 @@ class StateCollector:
             "severity": c.get("severity", 0.0),
             "at": round(self.elapsed(), 3),
         })
+
+    # ------------------------------------------------------------------
+    # Packet sampling — real legit + attacker packets, rate-limited
+    # ------------------------------------------------------------------
+
+    def _add_packet(self, kind: str, pkt: "Packet"):
+        self._pkt_seq += 1
+        self.packet_log.append({
+            "id":       self._pkt_seq,
+            # Absolute monotonic clock, not elapsed() — packet_log now
+            # survives scenario resets (which rebase elapsed() to 0), so
+            # timestamps here must stay comparable across that boundary
+            # for the frontend's "last N seconds" recency filtering.
+            "t":        round(time.monotonic(), 3),
+            "kind":     kind,               # "legit" | "attack"
+            "src_ip":   pkt.src_ip,
+            "dst_ip":   pkt.dst_ip,
+            "src_port": pkt.src_port,
+            "dst_port": pkt.dst_port,
+            "protocol": pkt.protocol,
+            "size":     pkt.pkt_size,
+            "segment":  pkt.segment,
+            "label":    pkt.label,
+        })
+
+    def sample_packets(self, seg_id: str, gen: "TrafficGenerator"):
+        """
+        Called on every TrafficGenerator sample tick (10 Hz per segment).
+        Internally rate-limited so the packet log stays a small, honest
+        sample rather than an attempt at full fidelity.
+        """
+        # Real attack packets (currently only PortScanner deposits discrete
+        # Packet objects) — peek non-destructively so we never compete with
+        # the TMA's own drain_attack_packets() consumption.
+        for pkt in gen.peek_attack_packets(seg_id):
+            self._add_packet("attack", pkt)
+
+        # DDoSAttacker injects a pure pps overlay, not discrete packets —
+        # synthesize one clearly-labeled representative flood packet every
+        # few ticks while the overlay is active, so a DDoS is still visible
+        # as "packets", without claiming per-packet fidelity to the flood.
+        attack_pps = gen.get_attack_pps(seg_id)
+        if attack_pps > 0:
+            key = f"ddos:{seg_id}"
+            tick = self._pkt_tick.get(key, 0) + 1
+            self._pkt_tick[key] = tick
+            if tick % 3 == 0:
+                hosts = gen.topology.hosts_in(seg_id)
+                if hosts:
+                    host = hosts[tick % len(hosts)]
+                    self._add_packet("attack", Packet(
+                        src_ip   = f"{(tick * 37) % 223 + 1}.{(tick * 11) % 256}."
+                                   f"{(tick * 7) % 256}.{(tick * 3) % 254 + 1}",
+                        dst_ip   = host.ip,
+                        src_port = 40000 + (tick % 20000),
+                        dst_port = 443,
+                        protocol = "TCP",
+                        pkt_size = 64,
+                        segment  = seg_id,
+                        label    = "DDoS flood (representative sample)",
+                    ))
+
+        # Legit background traffic — rate-limited to ~2 pkts/sec/segment,
+        # drawn from the same weighted traffic patterns show_packets.py uses.
+        key = f"legit:{seg_id}"
+        tick = self._pkt_tick.get(key, 0) + 1
+        self._pkt_tick[key] = tick
+        if tick % 5 == 0:
+            seg = gen.topology.get(seg_id)
+            for pkt in gen.generate_packets(seg, 2):
+                self._add_packet("legit", pkt)
 
     # ------------------------------------------------------------------
     # Bus handlers (each is an async callback)
@@ -232,7 +327,8 @@ class StateCollector:
         self.ag_task["TMA:1"]  = f"anomaly on {name}"
         self._trace("TMA:1", f"{atype} on {name} ({dev:+.1f}σ)")
         self._log("TMA-1", "#d9a23f",
-                  f"Alert — {atype.lower().replace('_', ' ')} on {name} ({dev:+.1f}σ)")
+                  f"Alert — {atype.lower().replace('_', ' ')} on {name} ({dev:+.1f}σ)",
+                  perf=msg.performative.value)
 
     async def _on_threat_report(self, msg: Message):
         self._emit_viz_event(msg)
@@ -250,13 +346,15 @@ class StateCollector:
             self.ag_task["ACA:1"]  = f"classifying · severity {sev:.2f}"
             self._trace("ACA:1", f"Confirmed {atk} — sev {sev:.2f}, conf {conf:.0%}")
             self._log("ACA-1", "#cf6b5e",
-                      f"Confirmed threat: {atk} on {name}, severity {sev:.2f}")
+                      f"Confirmed threat: {atk} on {name}, severity {sev:.2f}",
+                      perf=msg.performative.value)
         elif clf == "SUSPICIOUS":
             self.ag_state["ACA:1"] = "active"
             self.ag_task["ACA:1"]  = f"suspicious on {name}"
             self._trace("ACA:1", f"Suspicious on {name} (conf {conf:.0%})")
             self._log("ACA-1", "#d9a23f",
-                      f"Suspicious pattern on {name} (confidence {conf:.0%})")
+                      f"Suspicious pattern on {name} (confidence {conf:.0%})",
+                      perf=msg.performative.value)
         else:
             self.fp += 1
 
@@ -273,12 +371,15 @@ class StateCollector:
 
         if "MULTI_SEGMENT" in pattern:
             self._log("TIA-1", "#3fa3a8",
-                      "Multi-segment scan detected — forming response coalition")
+                      "Multi-segment scan detected — forming response coalition",
+                      perf=msg.performative.value)
         elif "COORDINATED" in pattern:
             self._log("TIA-1", "#3fa3a8",
-                      "Coordinated DDoS across segments — coalition activated")
+                      "Coordinated DDoS across segments — coalition activated",
+                      perf=msg.performative.value)
         else:
-            self._log("TIA-1", "#3fa3a8", f"{name} ranked highest-priority threat")
+            self._log("TIA-1", "#3fa3a8", f"{name} ranked highest-priority threat",
+                      perf=msg.performative.value)
 
     async def _on_coalition(self, msg: Message):
         self._emit_viz_event(msg)
@@ -291,11 +392,43 @@ class StateCollector:
         self.active_incidents[inc_id] = {
             "seg": seg, "action": action, "t": time.monotonic()
         }
+        self.ballots[inc_id] = {
+            "incident_id": inc_id,
+            "segment": seg,
+            "segment_name": name,
+            "action": action,
+            "proposer": msg.sender,
+            "opened_at": round(self.elapsed(), 3),
+            "votes": [],
+            "outcome": None,
+        }
         self.ag_state["RCA:1"] = "active"
         self.ag_task["RCA:1"]  = f"coalition vote for {name}"
         self._trace("RCA:1", f"CFP: {action} for {name}")
         self._log("RCA-1", "#4577b5",
-                  f"Coalition vote — {action.lower().replace('_', ' ')} for {name}")
+                  f"Coalition vote — {action.lower().replace('_', ' ')} for {name}",
+                  perf=msg.performative.value)
+
+    async def _on_vote(self, msg: Message):
+        self._emit_viz_event(msg)
+        c      = msg.content
+        inc_id = c.get("incident_id", "")
+        ballot = self.ballots.get(inc_id)
+        decision = msg.performative.value  # ACCEPT / REJECT
+
+        if ballot is not None:
+            ballot["votes"].append({
+                "voter":    msg.sender,
+                "decision": decision,
+                "reason":   c.get("reason", ""),
+                "t":        round(self.elapsed(), 3),
+            })
+
+        color = "#4a9e7f" if decision == "ACCEPT" else "#cf6b5e"
+        self._trace(msg.sender, f"voted {decision} on {inc_id}")
+        self._log(msg.sender.replace(":", "-"), color,
+                  f"Vote {decision} from {msg.sender} — {c.get('reason', '') or inc_id}",
+                  perf=decision)
 
     async def _on_resolution(self, msg: Message):
         self._emit_viz_event(msg)
@@ -310,6 +443,14 @@ class StateCollector:
 
         self.active_incidents.pop(inc_id, None)
 
+        ballot = self.ballots.pop(inc_id, None)
+        if ballot is not None:
+            ballot["outcome"]       = outcome
+            ballot["votes_accept"]  = c.get("votes_accept", 0)
+            ballot["votes_reject"]  = c.get("votes_reject", 0)
+            ballot["resolved_at"]   = round(self.elapsed(), 3)
+            self.resolved_ballots.append(ballot)
+
         if outcome == "EXECUTED":
             self.mttr_ms.append(dur_ms)
             if len(self.mttr_ms) > 100:
@@ -319,21 +460,49 @@ class StateCollector:
                 ip = tgt["src_ip"]
                 self.blocked_ips.add(ip)
                 self.ag_task["RCA:1"] = f"blocked {ip}"
-                self._log("RCA-1", "#4577b5", f"Mitigation — {ip} blocked ({dur_ms} ms)")
-            elif "segment" in tgt:
+                self._log("RCA-1", "#4577b5", f"Mitigation — {ip} blocked ({dur_ms} ms)",
+                          perf=msg.performative.value)
+            elif "segment" in tgt and action == "QUARANTINE_SEGMENT":
                 qseg = tgt["segment"]
                 self.quarantined_segs.add(qseg)
+                if self.gen:
+                    self.gen.quarantine(qseg)
                 if self._disruption_start is None:
                     self._disruption_start = time.monotonic()
                 qname = SEG_MAP.get(qseg, {}).get("name", qseg)
                 self.ag_task["RCA:1"] = f"quarantined {qname}"
                 self._log("RCA-1", "#4577b5",
-                          f"Mitigation — {qname} quarantined ({dur_ms} ms)")
+                          f"Mitigation — {qname} quarantined ({dur_ms} ms)",
+                          perf=msg.performative.value)
+            elif "segment" in tgt:
+                # THROTTLE_SEGMENT (rung 0, non-voted) — a lighter-touch
+                # response than QUARANTINE_SEGMENT; does not black out
+                # traffic or set the QUARANTINED badge.
+                self.ag_task["RCA:1"] = f"throttled {name}"
+                self._log("RCA-1", "#4577b5",
+                          f"Mitigation — {name} throttled ({dur_ms} ms)",
+                          perf=msg.performative.value)
 
             self._trace("RCA:1", f"{action} EXECUTED for {name} ({dur_ms} ms)")
+        elif outcome == "RELEASED":
+            rseg = tgt.get("segment", "")
+            if rseg in self.quarantined_segs:
+                self.quarantined_segs.discard(rseg)
+                if self.gen:
+                    self.gen.unquarantine(rseg)
+                if self._disruption_start is not None:
+                    self.disruption_secs += time.monotonic() - self._disruption_start
+                    self._disruption_start = time.monotonic() if self.quarantined_segs else None
+                rname = SEG_MAP.get(rseg, {}).get("name", rseg)
+                self.ag_task["RCA:1"] = f"released {rname}"
+                self._log("RCA-1", "#4577b5",
+                          f"Mitigation — {rname} quarantine released ({dur_ms} ms hold)",
+                          perf=msg.performative.value)
+                self._trace("RCA:1", f"quarantine released for {rname}")
         else:
             self._log("RCA-1", "#d9a23f",
-                      f"Vote rejected — {action} not executed for {name}")
+                      f"Vote rejected — {action} not executed for {name}",
+                      perf=msg.performative.value)
             self._trace("RCA:1", f"{action} REJECTED for {name}")
 
     async def _on_grant(self, msg: Message):
@@ -343,26 +512,45 @@ class StateCollector:
         res     = c.get("resource_type", "")
         seg     = c.get("segment", "")
         name    = SEG_MAP.get(seg, {}).get("name", seg)
+        bid     = c.get("bid_value")
 
         if outcome == "GRANTED":
             self.ag_state["RAA:1"] = "active"
             self.ag_task["RAA:1"]  = f"auction: {res.lower()} allocated"
             self._trace("RAA:1", f"{res} granted for {name}")
+            bid_txt = f" (bid {bid:.2f})" if bid is not None else ""
             self._log("RAA-1", "#7b6fc4",
-                      f"Auction won — {res.lower()} slot allocated for {name}")
+                      f"Auction won — {res.lower()} slot allocated for {name}{bid_txt}",
+                      perf=msg.performative.value)
         elif outcome == "DENIED":
+            weakest = c.get("weakest_existing_bid")
             self._trace("RAA:1", f"{res} denied for {name} (capacity full)")
+            bid_txt = (f" (bid {bid:.2f} ≤ weakest {weakest:.2f})"
+                       if bid is not None and weakest is not None else "")
             self._log("RAA-1", "#7b6fc4",
-                      f"Auction — {res.lower()} at capacity for {name}")
+                      f"Auction — {res.lower()} at capacity for {name}{bid_txt}",
+                      perf=msg.performative.value)
+        elif outcome == "EVICTED":
+            self._trace("RAA:1", f"{res} evicted for {name} — outbid")
+            bid_txt = f" (bid {bid:.2f})" if bid is not None else ""
+            self._log("RAA-1", "#7b6fc4",
+                      f"Auction — {name} {res.lower()} allocation evicted, outbid{bid_txt}",
+                      perf=msg.performative.value)
 
     # ------------------------------------------------------------------
     # Reset (called on scenario change)
     # ------------------------------------------------------------------
 
     def reset(self):
+        """
+        Called on every scenario switch. Deliberately does NOT clear
+        self.logs, self.ballots/resolved_ballots, or self.packet_log —
+        the activity log, coalition-vote history, and packet stream are a
+        running record across scenarios, not scenario-scoped state. (Their
+        id counters — self.lamport, self._pkt_seq — are also left alone so
+        ids already sent to clients stay unique and never repeat.)
+        """
         self._start = time.monotonic()
-        self.lamport = 0
-        self.logs.clear()
         self.viz_events.clear()
         self._viz_seq = 0
         self.tp = self.fp = 0
@@ -370,8 +558,12 @@ class StateCollector:
         self._disruption_start = None
         self.disruption_secs = 0.0
         self.blocked_ips.clear()
+        if self.gen:
+            for sid in self.quarantined_segs:
+                self.gen.unquarantine(sid)
         self.quarantined_segs.clear()
         self.active_incidents.clear()
+        self._pkt_tick.clear()
         for aid in list(self.ag_state):
             self.ag_state[aid] = "mon"
             self.ag_task[aid]  = "watching traffic"
@@ -427,18 +619,24 @@ class StateCollector:
         for s in SEGMENTS:
             sid   = s["id"]
             stats = gen.get_stats(sid)
-            pps   = stats.current_pps
             dev   = stats.deviation
             hosts = sorted(gen.topology.hosts_in(sid), key=lambda h: h.hostname)
 
             if sid in self.quarantined_segs:
                 health = "QUARANTINED"
-            elif abs(dev) >= 6:
-                health = "THREAT"
-            elif abs(dev) >= 2:
-                health = "ANOMALY"
+                # gen.get_stats() intentionally keeps reporting the real,
+                # live reading even while blocked (see traffic.py
+                # quarantine()) so RCA can poll for recovery — override
+                # just the displayed number here, not the underlying stats.
+                pps = 0.0
             else:
-                health = "NORMAL"
+                pps = stats.current_pps
+                if abs(dev) >= 6:
+                    health = "THREAT"
+                elif abs(dev) >= 2:
+                    health = "ANOMALY"
+                else:
+                    health = "NORMAL"
 
             segs_out[sid] = {
                 **s,
@@ -505,6 +703,11 @@ class StateCollector:
             "metrics":          m,
             "blocked_ips":      list(self.blocked_ips),
             "quarantined_segs": list(self.quarantined_segs),
+            "ballots": {
+                "open":     list(self.ballots.values()),
+                "resolved": list(self.resolved_ballots),
+            },
+            "packets":          list(self.packet_log),
         }
 
 
@@ -605,12 +808,21 @@ class SimEngine:
         self.clock = SimClock()
         self.topo  = NetworkTopology()
         self.gen   = TrafficGenerator(self.topo, self.clock)
+        self.sc.gen = self.gen
         await self.bus.start()
 
         # Agents
         self.tma = TrafficMonitorAgent("TMA:1", self.bus, self.gen)
         self.aca = AnomalyClassifierAgent("ACA:1", self.bus)
-        self.rca = ResponseCoordinatorAgent("RCA:1", self.bus)
+
+        def _segment_is_normal(seg: str) -> bool:
+            # Same live-traffic reading TMA itself alerts on (see
+            # TrafficGenerator.quarantine() — the stats window keeps
+            # recording real traffic even while blocked), just reused here
+            # so RCA can poll a quarantined segment for early release.
+            return abs(self.gen.get_stats(seg).deviation) < ANOMALY_THRESHOLD
+
+        self.rca = ResponseCoordinatorAgent("RCA:1", self.bus, segment_is_normal=_segment_is_normal)
         self.tia = ThreatIntelligenceAgent("TIA:1", self.bus)
         self.raa = ResourceAllocatorAgent("RAA:1", self.bus)
 
@@ -632,6 +844,12 @@ class SimEngine:
             ).append(sample.packets_per_sec)
 
         self.gen.on_sample(_bw_tap)
+
+        # Hook traffic samples → sampled real packet log
+        async def _pkt_tap(sample):
+            self.sc.sample_packets(sample.segment, self.gen)
+
+        self.gen.on_sample(_pkt_tap)
 
         # Start traffic generator as a background task
         self._gen_task = asyncio.create_task(self.gen.run())
@@ -660,27 +878,31 @@ class SimEngine:
             t.cancel()
         self._atk_tasks.clear()
 
-    async def set_scenario(self, name: str):
-        """Switch to a new scenario: stop current attackers, start new ones."""
+    async def set_scenario(self, name: str, segment: str | None = None):
+        """Switch to a new scenario: stop current attackers, start new ones
+        targeting `segment` (falls back to a sensible default per scenario
+        if `segment` is missing or not a real segment id)."""
         if name not in SCENARIOS:
             name = "calm"
+
+        valid_segments = self.gen.topology.segment_ids()
 
         self._stop_attackers()
         self.sc.reset()
         self.scenario = name
 
         if name == "ddos":
-            # DDoS attack against public-facing segment.
+            target = segment if segment in valid_segments else "public-facing"
             atk = DDoSAttacker(
-                "DDoS:1", "public-facing", self.gen,
+                "DDoS:1", target, self.gen,
                 intensity_multiplier=6.0, ramp_seconds=3.0,
             )
             self._atk_tasks.append(asyncio.create_task(atk.launch(duration=3600)))
 
         elif name == "scan":
-            # Port scan against server segment.
+            target = segment if segment in valid_segments else "server"
             scanner = PortScanner(
-                "Scan:1", "server", self.gen,
+                "Scan:1", target, self.gen,
                 src_ip="45.33.32.156", probe_interval=0.3,
             )
             self._atk_tasks.append(asyncio.create_task(scanner.launch(duration=3600)))
@@ -753,7 +975,7 @@ async def websocket_endpoint(ws: WebSocket):
             try:
                 msg = json.loads(data)
                 if msg.get("type") == "scenario":
-                    await engine.set_scenario(msg["name"])
+                    await engine.set_scenario(msg["name"], msg.get("segment"))
             except Exception:
                 pass
     except WebSocketDisconnect:

@@ -1,13 +1,19 @@
-import { C } from "../../dashboard/constants";
+import { useMemo, useState } from "react";
+import { C, PERF_COLOR } from "../../dashboard/constants";
 import { healthColor } from "../../dashboard/utils";
+import PacketStream from "../PacketStream/PacketStream";
 import Sparkline from "../Sparkline/Sparkline";
+import VotingPanel from "../VotingPanel/VotingPanel";
 import {
   AttackPps,
   EmptyLogs,
   EventCount,
+  FilterChip,
+  FilterRow,
   HeaderMeta,
   HeaderTitle,
   LogDot,
+  LogHeaderRow,
   LogItem,
   LogList,
   LogMeta,
@@ -16,6 +22,7 @@ import {
   LogTextWrap,
   Panel,
   PanelHeader,
+  PerfTag,
   RailWrap,
   SegmentLabel,
   SegmentName,
@@ -25,10 +32,21 @@ import {
   SegmentValues,
 } from "./RightRail.styled";
 
-function RightRail({ segments, segMap, selectedSeg, setSelectedSeg, logs }) {
+const PERF_FILTERS = ["ALL", "INFORM", "CALL-FOR-PROPOSAL", "ACCEPT", "REJECT", "FAILURE"];
+
+function RightRail({ segments, segMap, selectedSeg, setSelectedSeg, logs, ballots, packets }) {
+  const [perfFilter, setPerfFilter] = useState("ALL");
+
+  const filteredLogs = useMemo(() => {
+    if (perfFilter === "ALL") return logs;
+    return logs.filter((ev) => ev.perf === perfFilter);
+  }, [logs, perfFilter]);
+
+  const segName = segMap[selectedSeg]?.name || segMap[selectedSeg]?.code;
+
   return (
     <RailWrap>
-      <Panel>
+      <Panel sx={{ flex: "0 1 190px" }}>
         <PanelHeader>
           <HeaderTitle>BANDWIDTH</HeaderTitle>
           <HeaderMeta>pps · live</HeaderMeta>
@@ -57,19 +75,31 @@ function RightRail({ segments, segMap, selectedSeg, setSelectedSeg, logs }) {
         })}
       </Panel>
 
-      <LogPanel>
+      <LogPanel sx={{ flex: "1.4 1 0" }}>
         <PanelHeader>
           <HeaderTitle>ACTIVITY LOG</HeaderTitle>
-          <EventCount>{logs.length} events</EventCount>
+          <EventCount>{filteredLogs.length} events</EventCount>
         </PanelHeader>
+        <FilterRow>
+          {PERF_FILTERS.map((p) => (
+            <FilterChip key={p} active={perfFilter === p ? 1 : 0} onClick={() => setPerfFilter(p)}>
+              {p}
+            </FilterChip>
+          ))}
+        </FilterRow>
         <LogList>
-          {logs.length === 0 ? (
+          {filteredLogs.length === 0 ? (
             <EmptyLogs>Waiting for events...</EmptyLogs>
           ) : (
-            logs.map((ev) => (
+            filteredLogs.map((ev) => (
               <LogItem key={ev.id}>
                 <LogDot dotcolor={ev.color} />
                 <LogTextWrap>
+                  {ev.perf && (
+                    <LogHeaderRow>
+                      <PerfTag tagcolor={PERF_COLOR[ev.perf] || C.idle}>{ev.perf}</PerfTag>
+                    </LogHeaderRow>
+                  )}
                   <LogText>{ev.text}</LogText>
                   <LogMeta>
                     {ev.time} · {ev.agent}
@@ -80,6 +110,15 @@ function RightRail({ segments, segMap, selectedSeg, setSelectedSeg, logs }) {
           )}
         </LogList>
       </LogPanel>
+
+      <VotingPanel ballots={ballots} selectedSeg={selectedSeg} segName={segName} sx={{ flex: "1 1 0" }} />
+      <PacketStream
+        packets={packets}
+        selectedSeg={selectedSeg}
+        segName={segName}
+        quarantined={segMap[selectedSeg]?.state === "QUARANTINED"}
+        sx={{ flex: "1 1 0" }}
+      />
     </RailWrap>
   );
 }

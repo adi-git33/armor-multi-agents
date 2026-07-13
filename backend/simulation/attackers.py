@@ -107,27 +107,32 @@ class DDoSAttacker(BaseAttacker):
             duration_s   = duration,
         )
 
-        start = time.monotonic()
-        while self._running and (time.monotonic() - start) < duration:
-            elapsed    = time.monotonic() - start
-            ramp_ratio = min(1.0, elapsed / self._ramp)
-            extra_pps  = peak_extra * ramp_ratio
+        try:
+            start = time.monotonic()
+            while self._running and (time.monotonic() - start) < duration:
+                elapsed    = time.monotonic() - start
+                ramp_ratio = min(1.0, elapsed / self._ramp)
+                extra_pps  = peak_extra * ramp_ratio
 
-            self._gen.add_attack_traffic(
-                self.target_segment, self.attacker_id, extra_pps
-            )
-            self._record(
-                "flood",
-                elapsed_s  = round(elapsed, 2),
-                extra_pps  = round(extra_pps, 1),
-                ramp_ratio = round(ramp_ratio, 2),
-                src_ip     = self._random_public_ip(),
-            )
-            await asyncio.sleep(0.1)
-
-        self._gen.clear_attack_traffic(self.target_segment, self.attacker_id)
-        self._record("attack_end", log_entries=len(self.action_log))
-        self._running = False
+                self._gen.add_attack_traffic(
+                    self.target_segment, self.attacker_id, extra_pps
+                )
+                self._record(
+                    "flood",
+                    elapsed_s  = round(elapsed, 2),
+                    extra_pps  = round(extra_pps, 1),
+                    ramp_ratio = round(ramp_ratio, 2),
+                    src_ip     = self._random_public_ip(),
+                )
+                await asyncio.sleep(0.1)
+        finally:
+            # Must run even on asyncio.CancelledError (SimEngine.set_scenario()
+            # cancels the launch() task directly on scenario switch, it doesn't
+            # wait for a graceful stop()) — otherwise this attacker's pps
+            # overlay is stuck in TrafficGenerator forever.
+            self._gen.clear_attack_traffic(self.target_segment, self.attacker_id)
+            self._record("attack_end", log_entries=len(self.action_log))
+            self._running = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -188,51 +193,54 @@ class PortScanner(BaseAttacker):
             port_order = ports[:6],
         )
 
-        start      = time.monotonic()
-        port_index = 0
+        try:
+            start      = time.monotonic()
+            port_index = 0
 
-        while self._running and (time.monotonic() - start) < duration:
-            port      = ports[port_index % len(ports)]
-            dst_ip    = target_ips[int(self._rng.integers(len(target_ips)))]
+            while self._running and (time.monotonic() - start) < duration:
+                port      = ports[port_index % len(ports)]
+                dst_ip    = target_ips[int(self._rng.integers(len(target_ips)))]
 
-            # Inject a micro-burst then immediately clear (stealthy pattern)
-            self._gen.add_attack_traffic(
-                self.target_segment, self.attacker_id, float(self._burst_size)
-            )
+                # Inject a micro-burst then immediately clear (stealthy pattern)
+                self._gen.add_attack_traffic(
+                    self.target_segment, self.attacker_id, float(self._burst_size)
+                )
 
-            # Build the probe packet and deposit it into the generator's
-            # attack packet buffer so the TMA can inspect port diversity.
-            pkt = Packet(
-                src_ip   = self._src_ip,
-                dst_ip   = dst_ip,
-                src_port = int(self._rng.integers(1024, 65535)),
-                dst_port = port,
-                protocol = "TCP",
-                pkt_size = 64,
-                segment  = self.target_segment,
-                label    = f"scan-probe {self._src_ip} -> {dst_ip}:{port}",
-            )
-            self._gen.add_attack_packets(self.target_segment, [pkt])
-            self.scan_packets.append(pkt)
-            self.scanned_ports.append(port)
+                # Build the probe packet and deposit it into the generator's
+                # attack packet buffer so the TMA can inspect port diversity.
+                pkt = Packet(
+                    src_ip   = self._src_ip,
+                    dst_ip   = dst_ip,
+                    src_port = int(self._rng.integers(1024, 65535)),
+                    dst_port = port,
+                    protocol = "TCP",
+                    pkt_size = 64,
+                    segment  = self.target_segment,
+                    label    = f"scan-probe {self._src_ip} -> {dst_ip}:{port}",
+                )
+                self._gen.add_attack_packets(self.target_segment, [pkt])
+                self.scan_packets.append(pkt)
+                self.scanned_ports.append(port)
 
-            self._record(
-                "probe",
-                dst_ip    = dst_ip,
-                port      = port,
-                elapsed_s = round(time.monotonic() - start, 2),
-            )
+                self._record(
+                    "probe",
+                    dst_ip    = dst_ip,
+                    port      = port,
+                    elapsed_s = round(time.monotonic() - start, 2),
+                )
 
-            port_index += 1
-            half = self._probe_interval / 2.0
-            await asyncio.sleep(half)
+                port_index += 1
+                half = self._probe_interval / 2.0
+                await asyncio.sleep(half)
+                self._gen.clear_attack_traffic(self.target_segment, self.attacker_id)
+                await asyncio.sleep(half)
+        finally:
+            # Must run even on asyncio.CancelledError — see DDoSAttacker.launch()
+            # for why (SimEngine.set_scenario() cancels this task directly).
             self._gen.clear_attack_traffic(self.target_segment, self.attacker_id)
-            await asyncio.sleep(half)
-
-        self._gen.clear_attack_traffic(self.target_segment, self.attacker_id)
-        self._record(
-            "scan_end",
-            unique_ports = len(set(self.scanned_ports)),
-            total_probes = len(self.scanned_ports),
-        )
-        self._running = False
+            self._record(
+                "scan_end",
+                unique_ports = len(set(self.scanned_ports)),
+                total_probes = len(self.scanned_ports),
+            )
+            self._running = False

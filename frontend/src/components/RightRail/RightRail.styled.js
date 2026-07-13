@@ -149,6 +149,50 @@ export const LogText = styled(Typography)(({ theme }) => ({
   color: theme.customDashboard.textBody,
 }));
 
+export const LogHeaderRow = styled(Box)({
+  display: "flex",
+  alignItems: "center",
+  gap: "6px",
+  marginBottom: "2px",
+});
+
+export const PerfTag = styled("span", {
+  shouldForwardProp: (prop) => prop !== "tagcolor",
+})(({ theme, tagcolor }) => ({
+  fontSize: 8,
+  fontWeight: 700,
+  letterSpacing: ".04em",
+  color: tagcolor,
+  border: `1px solid ${tagcolor}`,
+  borderRadius: "3px",
+  padding: "1px 4px",
+  lineHeight: 1.5,
+  whiteSpace: "nowrap",
+  opacity: 0.9,
+}));
+
+export const FilterRow = styled(Box)(({ theme }) => ({
+  display: "flex",
+  gap: "4px",
+  padding: "6px 14px",
+  borderBottom: `1px solid ${theme.customDashboard.panelBorderLight}`,
+  flexWrap: "wrap",
+}));
+
+export const FilterChip = styled("button", {
+  shouldForwardProp: (prop) => prop !== "active",
+})(({ theme, active }) => ({
+  fontSize: 8,
+  fontWeight: 600,
+  letterSpacing: ".03em",
+  padding: "2px 7px",
+  borderRadius: "9px",
+  border: `1px solid ${theme.customDashboard.panelBorder}`,
+  background: active ? theme.customDashboard.panelHoverSurface : "transparent",
+  color: active ? theme.customDashboard.textBody : theme.customDashboard.textFaint,
+  cursor: "pointer",
+}));
+
 export const LogMeta = styled(Typography)(({ theme }) => ({
   fontSize: 8,
   letterSpacing: ".03em",

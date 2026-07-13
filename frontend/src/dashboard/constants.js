@@ -45,6 +45,20 @@ export const BUS_AGENTS = [
   { id: "RAA:1", code: "RAA-1", role: "Resource Allocator", accent: C.purple },
 ];
 
+// FIPA-ACL performative -> display color (independent of topic color, so a
+// message's *type* is visually distinguishable from what it's *about*).
+export const PERF_COLOR = {
+  INFORM: "#7d8a99",
+  REQUEST: C.blue,
+  PROPOSE: C.blue,
+  "CALL-FOR-PROPOSAL": C.blue,
+  ACCEPT: C.green,
+  REJECT: C.red,
+  BID: C.purple,
+  FAILURE: C.red,
+  "NOT-UNDERSTOOD": C.amber,
+};
+
 export const LEGEND = [
   { color: C.green, label: "NORMAL" },
   { color: C.amber, label: "ANOMALY" },

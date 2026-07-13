@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import "./App.css";
 import AgentInspector from "./components/AgentInspector/AgentInspector";
 import ConnectionBanner from "./components/ConnectionBanner/ConnectionBanner";
@@ -21,6 +21,8 @@ function App() {
   const segs = state?.segments ? Object.values(state.segments) : [];
   const agents = state?.agents || {};
   const logs = state?.logs || [];
+  const ballots = state?.ballots || { open: [], resolved: [] };
+  const packets = state?.packets || [];
   const metrics = state?.metrics || { dr: 0, fpr: 0, mttr: 0, availability: 0, sw: 0 };
   const scenario = state?.scenario || "calm";
   const elapsed = state?.t || 0;
@@ -29,6 +31,19 @@ function App() {
   const activeSegId = segMap[selectedSeg] ? selectedSeg : segs[0]?.id;
   const selectedSegData = (activeSegId && segMap[activeSegId]) || segs[0] || {};
   const scenarioAtk = ["ddos", "scan"].includes(scenario);
+
+  // Switching the selected network while an attack scenario is running
+  // should redirect that attack to the newly selected segment, not just
+  // change which segment is displayed.
+  const handleSetSelectedSeg = useCallback(
+    (segId) => {
+      setSelSeg(segId);
+      if (scenario !== "calm") {
+        sendScenario(scenario, segId);
+      }
+    },
+    [scenario, sendScenario]
+  );
 
   const links = useMemo(() => {
     const hostSlotKeys = ["A", "B", "C", "D", "E"].slice(0, Math.min(5, selectedSegData?.hosts?.length || 0));
@@ -52,9 +67,16 @@ function App() {
     <div className="dashboard-app">
       <ConnectionBanner connected={connected} />
 
-      <SegmentCards segments={segs} selectedSeg={activeSegId || selectedSeg} setSelectedSeg={setSelSeg} segMap={segMap} />
+      <SegmentCards segments={segs} selectedSeg={activeSegId || selectedSeg} setSelectedSeg={handleSetSelectedSeg} segMap={segMap} />
 
-      <ScenarioMetricsBar scenario={scenario} elapsed={elapsed} metrics={metrics} wsReady={wsReady} sendScenario={sendScenario} />
+      <ScenarioMetricsBar
+        scenario={scenario}
+        elapsed={elapsed}
+        metrics={metrics}
+        wsReady={wsReady}
+        sendScenario={sendScenario}
+        selectedSeg={activeSegId || selectedSeg}
+      />
 
       <div className="dashboard-main">
         <TopologyStage
@@ -68,7 +90,15 @@ function App() {
           canvasRef={canvasRef}
         />
 
-        <RightRail segments={segs} segMap={segMap} selectedSeg={activeSegId || selectedSeg} setSelectedSeg={setSelSeg} logs={logs} />
+        <RightRail
+          segments={segs}
+          segMap={segMap}
+          selectedSeg={activeSegId || selectedSeg}
+          setSelectedSeg={handleSetSelectedSeg}
+          logs={logs}
+          ballots={ballots}
+          packets={packets}
+        />
       </div>
 
       <div className="dashboard-spacer" />

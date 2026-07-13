@@ -44,8 +44,8 @@ export function useDashboardSocket() {
     };
   }, []);
 
-  const sendScenario = useCallback((name) => {
-    const payload = JSON.stringify({ type: "scenario", name });
+  const sendScenario = useCallback((name, segment) => {
+    const payload = JSON.stringify({ type: "scenario", name, segment });
     const ws = wsRef.current;
 
     if (ws && ws.readyState === WebSocket.OPEN) {

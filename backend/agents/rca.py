@@ -78,6 +78,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Callable
 
 from agents.base import BaseAgent
 from bus.message_bus import MessageBus
@@ -107,6 +108,15 @@ MIN_ESCALATION_GAP = 1.5    # seconds
 # second alert for the same segment can even be published, so anything
 # at or below it would make escalation structurally impossible to trigger.
 ESCALATION_WINDOW = 8.0
+
+# A QUARANTINE_SEGMENT is released as soon as the segment's traffic looks
+# normal again (polled every EARLY_RELEASE_CHECK seconds via
+# segment_is_normal), or unconditionally once QUARANTINE_HOLD is reached —
+# whichever comes first. The hold is a fallback, not a guarantee the threat
+# is gone: if it's still live, TMA/ACA will re-flag it right after release
+# and RCA re-quarantines.
+QUARANTINE_HOLD        = 15.0
+EARLY_RELEASE_CHECK    = 1.0
 
 # Only the top rung of each ladder is "high-risk" per SRS §6.4 — only
 # QUARANTINE requires a coalition vote before executing.
@@ -142,13 +152,20 @@ class Incident:
 class ResponseCoordinatorAgent(BaseAgent):
 
     def __init__(self, agent_id: str, bus: MessageBus,
-                 naive_ladder: bool = False, naive_voting: bool = False) -> None:
+                 naive_ladder: bool = False, naive_voting: bool = False,
+                 segment_is_normal: Callable[[str], bool] | None = None) -> None:
         super().__init__(agent_id, bus)
 
         # Baseline/ablation flags (BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §4.1).
         # Both default False → zero behavior change vs. pre-existing code.
         self.naive_ladder = naive_ladder
         self.naive_voting = naive_voting
+
+        # Optional probe used only by the auto-release poll (segment →
+        # "does its live traffic currently look normal?"). None (default)
+        # means "no early-release signal available" — quarantine then
+        # simply holds for the full QUARANTINE_HOLD every time.
+        self._segment_is_normal = segment_is_normal
 
         # BDI Beliefs
         self._history:      dict[str, list[dict]] = {}   # segment → recent reports
@@ -158,6 +175,9 @@ class ResponseCoordinatorAgent(BaseAgent):
         # Escalation state
         self._esc_level:   dict[str, int]   = {}  # segment → current rung index
         self._last_action: dict[str, float] = {}  # segment → monotonic time of last resolved action
+
+        # Pending auto-release timers for quarantined segments (QUARANTINE_HOLD)
+        self._release_tasks: dict[str, asyncio.Task] = {}
 
         # Completed resolutions for introspection / testing
         self.resolutions: list[dict] = []
@@ -435,6 +455,9 @@ class ResponseCoordinatorAgent(BaseAgent):
             content      = resolution,
         )
 
+        if incident.action == "QUARANTINE_SEGMENT":
+            self._schedule_release(incident.segment)
+
         logger.info(
             "[%s] EXECUTED (immediate)  incident=%s  action=%-20s  "
             "level=%d  time=%dms",
@@ -469,6 +492,67 @@ class ResponseCoordinatorAgent(BaseAgent):
             # apply full cooldown and reset for the next attack.
             self._cooldown[incident.segment]  = incident.resolved_at
             self._esc_level[incident.segment] = 0
+
+    # ------------------------------------------------------------------
+    # Auto-release — lift a QUARANTINE_SEGMENT as soon as traffic looks
+    # normal again, or after QUARANTINE_HOLD regardless
+    # ------------------------------------------------------------------
+
+    def _schedule_release(self, segment: str) -> None:
+        """(Re)start the auto-release poll for a just-quarantined segment.
+        A fresh QUARANTINE_SEGMENT for the same segment restarts it rather
+        than stacking timers, so the release always reflects the most
+        recent quarantine event."""
+        old = self._release_tasks.get(segment)
+        if old and not old.done():
+            old.cancel()
+        self._release_tasks[segment] = asyncio.create_task(
+            self._release_after_hold(segment)
+        )
+
+    async def _release_after_hold(self, segment: str) -> None:
+        """Poll every EARLY_RELEASE_CHECK seconds; release as soon as the
+        segment's live traffic (still measured under quarantine — see
+        TrafficGenerator.quarantine()) looks normal again, or once
+        QUARANTINE_HOLD is reached, whichever comes first."""
+        elapsed  = 0.0
+        early    = False
+        while elapsed < QUARANTINE_HOLD:
+            await asyncio.sleep(EARLY_RELEASE_CHECK)
+            elapsed += EARLY_RELEASE_CHECK
+            if self._segment_is_normal and self._segment_is_normal(segment):
+                early = True
+                break
+
+        self._release_tasks.pop(segment, None)
+
+        # RESOLUTION_COOLDOWN was stamped when QUARANTINE_SEGMENT executed,
+        # to stop the *original* incident from flapping — it was never meant
+        # to blackout detection after the segment is already back online.
+        # Clear it so a genuinely new attack right after release can be
+        # acted on immediately instead of being silently dropped by
+        # _cooldown_allows() for up to another RESOLUTION_COOLDOWN seconds.
+        self._cooldown.pop(segment, None)
+
+        await self.publish(
+            topic        = Topic.RESOLUTION,
+            performative = Performative.INFORM,
+            content      = {
+                "incident_id":        "",
+                "segment":            segment,
+                "classification":     "",
+                "action":             "RELEASE_SEGMENT",
+                "outcome":            "RELEASED",
+                "decided_by":         self.agent_id,
+                "duration_ms":        round(elapsed * 1000),
+                "enforcement_target": {"segment": segment},
+            },
+        )
+        logger.info(
+            "[%s] releasing %s after %.0fs (%s)",
+            self.agent_id, segment, elapsed,
+            "traffic normal" if early else "hold expired",
+        )
 
     # ------------------------------------------------------------------
     # Intention 3 — open coalition vote
@@ -572,6 +656,9 @@ class ResponseCoordinatorAgent(BaseAgent):
                 performative = Performative.INFORM,
                 content      = resolution,
             )
+
+            if incident.action == "QUARANTINE_SEGMENT":
+                self._schedule_release(incident.segment)
 
             logger.info(
                 "[%s] RESOLVED  incident=%s  action=%-20s  "
