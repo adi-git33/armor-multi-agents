@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local cache of the last validation run (per-machine, regenerated on every run)
+backend/validation/last_run.json
+
 # C extensions
 *.so
 
@@ -222,3 +225,5 @@ __marimo__/
 **/node_modules/
 
 **/my_report/
+
+.claude

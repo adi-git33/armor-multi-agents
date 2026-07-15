@@ -1,7 +1,7 @@
 """
 validate_scenarios.py — SRS §8 Scenario Validation
 ====================================================
-Runs all six validation scenarios defined in the SRS/SDD and checks
+Runs the six validation scenarios defined in the SRS/SDD and checks
 each against its documented success criteria.
 
   Scenario 1  Single-Segment DDoS Attack
@@ -10,6 +10,13 @@ each against its documented success criteria.
   Scenario 4  Zero-Day / Novel Attack Detection
   Scenario 5  Agent Failure & Resilience
   Scenario 6  Voting Protocol Validation
+
+Each scenario lives in its own `run_sN()` coroutine, independently
+awaitable and returning its own ValidationSuite — this lets the web UI
+(and `run_validation.py --suite s1` etc.) run a single scenario without
+paying for the other five. `run()` simply awaits all six in order and
+merges their results/metrics into one combined suite, so the existing
+"scenarios" CLI/API entry point behaves exactly as before.
 
 S1, S2, S3, S6 delegate their measurement to scenario_lib.run_scenario_N()
 (BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §5.4) — this file only adds the
@@ -22,6 +29,7 @@ construction (see OFAT_SCENARIOS in scenario_lib.py), so there was
 nothing to extract.
 
 Run:  cd backend && python validation/validate_scenarios.py
+      cd backend && python validation/validate_scenarios.py --suite s1 (via run_validation.py)
 """
 from __future__ import annotations
 import asyncio, sys, time
@@ -63,12 +71,22 @@ async def _make_system(seed: int = 42):
     return bus, gen, topology
 
 
-async def run() -> ValidationSuite:
-    suite = ValidationSuite("Scenario Validation — SRS §8 (All 6 Scenarios)")
+def _merge_metrics(target: dict, source: dict) -> None:
+    """Recursive dict merge — lets each scenario contribute just its own
+    keys (e.g. social_welfare.S3) without clobbering siblings already
+    merged in from earlier scenarios."""
+    for key, val in source.items():
+        if isinstance(val, dict) and isinstance(target.get(key), dict):
+            _merge_metrics(target[key], val)
+        else:
+            target[key] = val
 
-    # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 1 — Single-Segment DDoS Attack (SRS §8.1)
-    # ══════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════
+# SCENARIO 1 — Single-Segment DDoS Attack (SRS §8.1)
+# ══════════════════════════════════════════════════════════════════════
+async def run_s1() -> ValidationSuite:
+    suite = ValidationSuite("Scenario 1 — Single-Segment DDoS Attack (SRS §8.1)")
     section("SCENARIO 1  Single-Segment DDoS Attack")
 
     r1 = await run_scenario_1()
@@ -96,9 +114,23 @@ async def run() -> ValidationSuite:
                 sw_s1 >= MIN_SW,
                 observed=f"SW ≈ {sw_s1:.3f}", expected=f"≥ {MIN_SW}")
 
-    # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 2 — Multi-Segment Coordinated Attack (SRS §8.2)
-    # ══════════════════════════════════════════════════════════════════
+    suite.set_metrics({
+        "social_welfare": {"S1": {"value": sw_s1, "target": MIN_SW, "passed": sw_s1 >= MIN_SW}},
+        "attacker_utility": {
+            "S1": {"value": evasion_s1_cont, "target": 0.50,
+                   "passed": evasion_s1_cont < 0.50, "label": "Evasion (detect latency)"},
+        },
+    })
+
+    suite.print_results()
+    return suite
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SCENARIO 2 — Multi-Segment Coordinated Attack (SRS §8.2)
+# ══════════════════════════════════════════════════════════════════════
+async def run_s2() -> ValidationSuite:
+    suite = ValidationSuite("Scenario 2 — Multi-Segment Coordinated Attack (SRS §8.2)")
     section("SCENARIO 2  Multi-Segment Coordinated Attack")
 
     r2 = await run_scenario_2()
@@ -124,9 +156,23 @@ async def run() -> ValidationSuite:
                 sw_s2 >= MIN_SW,
                 observed=f"SW ≈ {sw_s2:.3f}", expected=f"≥ {MIN_SW}")
 
-    # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 3 — Resource Contention Under Heavy Load (SRS §8.3)
-    # ══════════════════════════════════════════════════════════════════
+    suite.set_metrics({
+        "social_welfare": {"S2": {"value": sw_s2, "target": MIN_SW, "passed": sw_s2 >= MIN_SW}},
+        "attacker_utility": {
+            "S2": {"value": evasion_s2_cont, "target": 0.50,
+                   "passed": evasion_s2_cont < 0.50, "label": "Evasion (seg coverage)"},
+        },
+    })
+
+    suite.print_results()
+    return suite
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SCENARIO 3 — Resource Contention Under Heavy Load (SRS §8.3)
+# ══════════════════════════════════════════════════════════════════════
+async def run_s3() -> ValidationSuite:
+    suite = ValidationSuite("Scenario 3 — Resource Contention Under Heavy Load (SRS §8.3)")
     section("SCENARIO 3  Resource Contention Under Heavy Load")
 
     r3           = await run_scenario_3()
@@ -155,9 +201,28 @@ async def run() -> ValidationSuite:
                 sw_s3 >= MIN_SW,
                 observed=f"SW ≈ {sw_s3:.3f}", expected=f"≥ {MIN_SW}")
 
-    # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 4 — Zero-Day / Novel Attack Detection (SRS §8.4)
-    # ══════════════════════════════════════════════════════════════════
+    suite.set_metrics({
+        "social_welfare": {"S3": {"value": sw_s3, "target": MIN_SW, "passed": sw_s3 >= MIN_SW}},
+        "attacker_utility": {
+            "S3": {"value": evasion_s3_cont, "target": 0.50,
+                   "passed": evasion_s3_cont < 0.50, "label": "Evasion (concurrent)"},
+        },
+        "resource": {
+            "overhead": {"value": overhead3, "target": 0.40, "passed": overhead3 < 0.40},
+            "grants_s3": all_grants3,
+            "efficiency_s3": len([b for b in granted_bids if b >= 0.70]) / max(all_grants3, 1),
+        },
+    })
+
+    suite.print_results()
+    return suite
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SCENARIO 4 — Zero-Day / Novel Attack Detection (SRS §8.4)
+# ══════════════════════════════════════════════════════════════════════
+async def run_s4() -> ValidationSuite:
+    suite = ValidationSuite("Scenario 4 — Zero-Day / Novel Attack Detection (SRS §8.4)")
     section("SCENARIO 4  Zero-Day / Novel Attack Detection")
 
     bus4, gen4, _ = await _make_system(seed=140)
@@ -228,9 +293,23 @@ async def run() -> ValidationSuite:
                 sw_s4 >= MIN_SW,
                 observed=f"SW ≈ {sw_s4:.3f}", expected=f"≥ {MIN_SW}")
 
-    # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 5 — Agent Failure & Resilience (SRS §8.5)
-    # ══════════════════════════════════════════════════════════════════
+    suite.set_metrics({
+        "social_welfare": {"S4": {"value": sw_s4, "target": MIN_SW, "passed": sw_s4 >= MIN_SW}},
+        "attacker_utility": {
+            "S4": {"value": evasion_s4_cont, "target": 0.75,
+                   "passed": evasion_s4_cont < 0.75, "label": "Evasion (novel/zero-day)"},
+        },
+    })
+
+    suite.print_results()
+    return suite
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SCENARIO 5 — Agent Failure & Resilience (SRS §8.5)
+# ══════════════════════════════════════════════════════════════════════
+async def run_s5() -> ValidationSuite:
+    suite = ValidationSuite("Scenario 5 — Agent Failure & Resilience (SRS §8.5)")
     section("SCENARIO 5  Agent Failure & Resilience")
 
     bus5, gen5, _ = await _make_system(seed=150)
@@ -278,9 +357,23 @@ async def run() -> ValidationSuite:
                 sw_s5 >= MIN_SW,
                 observed=f"SW ≈ {sw_s5:.3f}", expected=f"≥ {MIN_SW}")
 
-    # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 6 — Voting Protocol Validation (SRS §8.6)
-    # ══════════════════════════════════════════════════════════════════
+    suite.set_metrics({
+        "social_welfare": {"S5": {"value": sw_s5, "target": MIN_SW, "passed": sw_s5 >= MIN_SW}},
+        "attacker_utility": {
+            "S5": {"value": evasion_s5_cont, "target": 0.50,
+                   "passed": evasion_s5_cont < 0.50, "label": "Evasion (failover)"},
+        },
+    })
+
+    suite.print_results()
+    return suite
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SCENARIO 6 — Voting Protocol Validation (SRS §8.6)
+# ══════════════════════════════════════════════════════════════════════
+async def run_s6() -> ValidationSuite:
+    suite = ValidationSuite("Scenario 6 — Voting Protocol Validation (SRS §8.6)")
     section("SCENARIO 6  Voting Protocol Validation")
 
     r6            = await run_scenario_6()
@@ -309,38 +402,27 @@ async def run() -> ValidationSuite:
                 observed=f"SW ≈ {sw_s6:.3f}", expected=f"≥ {MIN_SW}")
 
     suite.set_metrics({
-        "social_welfare": {
-            "S1": {"value": sw_s1, "target": MIN_SW, "passed": sw_s1 >= MIN_SW},
-            "S2": {"value": sw_s2, "target": MIN_SW, "passed": sw_s2 >= MIN_SW},
-            "S3": {"value": sw_s3, "target": MIN_SW, "passed": sw_s3 >= MIN_SW},
-            "S4": {"value": sw_s4, "target": MIN_SW, "passed": sw_s4 >= MIN_SW},
-            "S5": {"value": sw_s5, "target": MIN_SW, "passed": sw_s5 >= MIN_SW},
-            "S6": {"value": sw_s6, "target": MIN_SW, "passed": sw_s6 >= MIN_SW},
-        },
+        "social_welfare": {"S6": {"value": sw_s6, "target": MIN_SW, "passed": sw_s6 >= MIN_SW}},
         "attacker_utility": {
-            "S1": {"value": evasion_s1_cont, "target": 0.50,
-                   "passed": evasion_s1_cont < 0.50, "label": "Evasion (detect latency)"},
-            "S2": {"value": evasion_s2_cont, "target": 0.50,
-                   "passed": evasion_s2_cont < 0.50, "label": "Evasion (seg coverage)"},
-            "S3": {"value": evasion_s3_cont, "target": 0.50,
-                   "passed": evasion_s3_cont < 0.50, "label": "Evasion (concurrent)"},
-            "S4": {"value": evasion_s4_cont, "target": 0.75,
-                   "passed": evasion_s4_cont < 0.75, "label": "Evasion (novel/zero-day)"},
-            "S5": {"value": evasion_s5_cont, "target": 0.50,
-                   "passed": evasion_s5_cont < 0.50, "label": "Evasion (failover)"},
             "S6": {"value": evasion_s6_cont, "target": 0.15,
                    "passed": evasion_s6_cont < 0.15, "label": "Evasion (vote delay)"},
-        },
-        "resource": {
-            "overhead": {"value": overhead3, "target": 0.40,
-                         "passed": overhead3 < 0.40},
-            "grants_s3": all_grants3,
-            "efficiency_s3": len([b for b in granted_bids if b >= 0.70]) / max(all_grants3, 1),
         },
     })
 
     suite.print_results()
     return suite
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Combined — all six in order, merged into one suite (legacy entry point)
+# ══════════════════════════════════════════════════════════════════════
+async def run() -> ValidationSuite:
+    combined = ValidationSuite("Scenario Validation — SRS §8 (All 6 Scenarios)")
+    for scenario_run in (run_s1, run_s2, run_s3, run_s4, run_s5, run_s6):
+        suite = await scenario_run()
+        combined.results.extend(suite.results)
+        _merge_metrics(combined.metrics, suite.metrics)
+    return combined
 
 
 if __name__ == "__main__":

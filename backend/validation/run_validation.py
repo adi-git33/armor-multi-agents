@@ -46,14 +46,24 @@ from validation.helpers import ValidationSuite, ValidationResult, GREEN, RED, BO
 from validation.visualize_results import export_charts, print_chart_summary
 
 # ── suite registry ─────────────────────────────────────────────────────
+# (module_name, label, entrypoint function name in that module)
 SUITES = {
-    "tma":       ("validate_tma",       "TMA  (Traffic Monitor Agent)"),
-    "aca":       ("validate_aca",       "ACA  (Anomaly Classifier Agent)"),
-    "rca":       ("validate_rca",       "RCA  (Response Coordinator Agent)"),
-    "tia":       ("validate_tia",       "TIA  (Threat Intelligence Agent)"),
-    "raa":       ("validate_raa",       "RAA  (Resource Allocator Agent)"),
-    "system":    ("validate_system",    "System-Level  (FR-29..FR-34 + SW)"),
-    "scenarios": ("validate_scenarios", "Scenarios  (SRS §8, all 6)"),
+    "tma":       ("validate_tma",       "TMA  (Traffic Monitor Agent)", "run"),
+    "aca":       ("validate_aca",       "ACA  (Anomaly Classifier Agent)", "run"),
+    "rca":       ("validate_rca",       "RCA  (Response Coordinator Agent)", "run"),
+    "tia":       ("validate_tia",       "TIA  (Threat Intelligence Agent)", "run"),
+    "raa":       ("validate_raa",       "RAA  (Resource Allocator Agent)", "run"),
+    "system":    ("validate_system",    "System-Level  (FR-29..FR-34 + SW)", "run"),
+    "scenarios": ("validate_scenarios", "Scenarios  (SRS §8, all 6)", "run"),
+    # Individually-runnable scenarios (same module, one entrypoint each) —
+    # lets the web UI and `--suite sN` run a single SRS §8 scenario instead
+    # of paying for all six.
+    "s1":        ("validate_scenarios", "Scenario 1 — Single-Segment DDoS Attack", "run_s1"),
+    "s2":        ("validate_scenarios", "Scenario 2 — Multi-Segment Coordinated Attack", "run_s2"),
+    "s3":        ("validate_scenarios", "Scenario 3 — Resource Contention Under Heavy Load", "run_s3"),
+    "s4":        ("validate_scenarios", "Scenario 4 — Zero-Day / Novel Attack Detection", "run_s4"),
+    "s5":        ("validate_scenarios", "Scenario 5 — Agent Failure & Resilience", "run_s5"),
+    "s6":        ("validate_scenarios", "Scenario 6 — Voting Protocol Validation", "run_s6"),
 }
 
 QUICK_SUITES = ["tma", "aca", "rca", "system"]
@@ -71,10 +81,10 @@ def _apply_vote_window_ms(ms: float) -> None:
             importlib.reload(sys.modules[name])
 
 
-async def run_suite(module_name: str) -> ValidationSuite:
+async def run_suite(module_name: str, func_name: str = "run") -> ValidationSuite:
     import importlib
     mod = importlib.import_module(module_name)
-    return await mod.run()
+    return await getattr(mod, func_name)()
 
 
 def _print_master_summary(
@@ -316,10 +326,10 @@ async def main(argv=None) -> int:
         suites_run: list[tuple[str, ValidationSuite]] = []
 
         for key in keys:
-            module_name, label = SUITES[key]
+            module_name, label, func_name = SUITES[key]
             print(f"\n  ▶  Running {BOLD}{label}{RESET} …")
             try:
-                suite = await run_suite(module_name)
+                suite = await run_suite(module_name, func_name)
                 suites_run.append((label, suite))
             except Exception as exc:
                 print(f"  {RED}ERROR in {label}: {exc}{RESET}")

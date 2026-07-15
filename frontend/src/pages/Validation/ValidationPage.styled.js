@@ -411,7 +411,7 @@ export const VerdictBanner = styled(Box, {
   border: `1px solid ${ok ? theme.palette.success.main : theme.palette.error.main}`,
 }));
 
-// ── charts gallery ───────────────────────────────────────────────────
+// ── charts panel (rendered charts live in components/ValidationCharts) ──
 export const ChartsPanel = styled(Paper)(({ theme }) => ({
   border: `1px solid ${theme.customDashboard.panelBorder}`,
   borderRadius: "9px",
@@ -426,29 +426,3 @@ export const ChartsHeaderRow = styled(Box)({
   alignItems: "center",
   justifyContent: "space-between",
 });
-
-export const ChartsGrid = styled(Box)({
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-  gap: "14px",
-});
-
-export const ChartCard = styled(Box)(({ theme }) => ({
-  border: `1px solid ${theme.customDashboard.panelBorderLight}`,
-  borderRadius: "8px",
-  overflow: "hidden",
-  backgroundColor: theme.customDashboard.panelSubtleSurface,
-}));
-
-export const ChartImg = styled("img")({
-  width: "100%",
-  display: "block",
-  backgroundColor: "#ffffff",
-});
-
-export const ChartCaption = styled(Typography)(({ theme }) => ({
-  fontSize: 12,
-  color: theme.customDashboard.textSecondary,
-  padding: "7px 10px",
-  borderTop: `1px solid ${theme.customDashboard.panelBorderLight}`,
-}));

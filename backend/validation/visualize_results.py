@@ -371,6 +371,43 @@ def _fig5_resource_utilization(metrics: dict, out: Path) -> Path | None:
     return path
 
 
+# (title, std, stress, target, higher_better, y_max, fmt, tgt_annotation)
+# fmt: "pct" → %, "ms" → ms, "f3" → 3 d.p., "yn" → Correct / Violated
+#
+# Fixed illustrative comparison (no formal load sweep — §5.2): Baseline is the
+# standard S3 scenario result, High Stress is the system-level stress-test
+# condition. Not derived from whichever suites happen to run, so it's the same
+# every time — single source of truth for both the PNG figure (CLI/report
+# export) and the frontend's live chart (degradation_panel_data()).
+DEGRADATION_PANELS = [
+    ("Detection Rate",
+     1.000, 1.000, 0.90, True,  1.15, "pct", "threshold: 90%"),
+    ("Alert False Positive Rate",
+     0.000, 0.429, 0.10, False, 0.60, "pct", "threshold: 10%"),
+    ("Response Time (MTTR)",
+     315,   315,   1000, False, 1300, "ms",  "threshold: 1,000 ms"),
+    ("Social Welfare",
+     0.897, 0.710, 0.80, True,  1.05, "f3",  "threshold: 0.80"),
+    ("Resource Overhead",
+     0.050, 0.004, 0.40, False, 0.55, "pct", "threshold: 40%"),
+    ("Auction Priority Ordering",
+     1.000, 0.000, 1.00, True,  1.30, "yn",  "required: correct"),
+]
+
+
+def degradation_panel_data() -> list[dict]:
+    """JSON-friendly form of DEGRADATION_PANELS for the frontend's live chart."""
+    return [
+        {
+            "title": title, "std": std_val, "stress": stress_val, "target": target,
+            "higher_better": higher_better, "y_max": y_max, "fmt": fmt,
+            "tgt_annotation": tgt_annotation,
+        }
+        for title, std_val, stress_val, target, higher_better, y_max, fmt, tgt_annotation
+        in DEGRADATION_PANELS
+    ]
+
+
 def _fig6_degradation_analysis(out: Path) -> Path:
     """
     Figure 6 — Degradation Analysis: Key Metrics Under Standard vs. High-Stress Load.
@@ -386,28 +423,11 @@ def _fig6_degradation_analysis(out: Path) -> Path:
 
     _LOAD_LABELS = ["Baseline", "High Stress"]
 
-    # (title, std, stress, target, higher_better, y_max, fmt, tgt_annotation)
-    # fmt: "pct" → %, "ms" → ms, "f3" → 3 d.p., "yn" → Correct / Violated
-    _PANELS = [
-        ("Detection Rate",
-         1.000, 1.000, 0.90, True,  1.15, "pct", "threshold: 90%"),
-        ("Alert False Positive Rate",
-         0.000, 0.429, 0.10, False, 0.60, "pct", "threshold: 10%"),
-        ("Response Time (MTTR)",
-         315,   315,   1000, False, 1300, "ms",  "threshold: 1,000 ms"),
-        ("Social Welfare",
-         0.897, 0.710, 0.80, True,  1.05, "f3",  "threshold: 0.80"),
-        ("Resource Overhead",
-         0.050, 0.004, 0.40, False, 0.55, "pct", "threshold: 40%"),
-        ("Auction Priority Ordering",
-         1.000, 0.000, 1.00, True,  1.30, "yn",  "required: correct"),
-    ]
-
     fig, axes = plt.subplots(2, 3, figsize=(13, 8))
     axes_flat = axes.flatten()
 
     for ax, (title, std_val, stress_val, target,
-             higher_better, y_max, fmt, tgt_annotation) in zip(axes_flat, _PANELS):
+             higher_better, y_max, fmt, tgt_annotation) in zip(axes_flat, DEGRADATION_PANELS):
 
         values = [std_val, stress_val]
         ok = [v >= target if higher_better else v <= target for v in values]

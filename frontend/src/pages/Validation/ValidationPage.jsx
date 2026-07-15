@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Tooltip } from "@mui/material";
+import ValidationCharts from "../../components/ValidationCharts/ValidationCharts";
 import { C } from "../../dashboard/constants";
-import { chartInfoFor } from "../../dashboard/validationConstants";
 import { useValidationSocket } from "../../hooks/useValidationSocket";
 import {
   Badge,
-  ChartCaption,
-  ChartCard,
-  ChartImg,
-  ChartsGrid,
   ChartsHeaderRow,
   ChartsPanel,
   Chevron,
@@ -92,17 +88,21 @@ function ValidationPage() {
     liveFeed,
     targetTable,
     overallVerdict,
-    chartUrls,
+    metrics,
     lastRunAt,
     lastError,
     runSuite,
     runAll,
+    runAllScenarios,
   } = useValidationSocket();
 
   const [expanded, setExpanded] = useState({});
   const elapsed = useElapsed(running);
 
   const allKeys = useMemo(() => suites.map((s) => s.id), [suites]);
+  const agentSuites = useMemo(() => suites.filter((s) => s.group !== "scenario"), [suites]);
+  const scenarioSuites = useMemo(() => suites.filter((s) => s.group === "scenario"), [suites]);
+  const scenarioKeys = useMemo(() => scenarioSuites.map((s) => s.id), [scenarioSuites]);
 
   const liveTally = useMemo(() => {
     let pass = 0;
@@ -116,50 +116,50 @@ function ValidationPage() {
     return { pass, fail, total: pass + fail };
   }, [perSuite]);
 
-  const chartGroups = useMemo(() => {
-    const groups = {};
-    for (const url of chartUrls) {
-      const info = chartInfoFor(url);
-      groups[info.group] = groups[info.group] || [];
-      groups[info.group].push({ url, title: info.title });
-    }
-    return groups;
-  }, [chartUrls]);
-
   const toggleExpanded = (key) => setExpanded((e) => ({ ...e, [key]: !e[key] }));
 
   const runningLabel = runningKey ? perSuite[runningKey]?.label || runningKey.toUpperCase() : null;
 
+  const renderSuiteButton = (s) => {
+    const suiteState = perSuite[s.id];
+    const isRunningThis = runningKey === s.id;
+    let toneColor = C.idle;
+    if (suiteState?.status === "done") toneColor = suiteState.allPassed ? C.green : C.red;
+    else if (suiteState?.status === "error") toneColor = C.red;
+    else if (isRunningThis) toneColor = C.amber;
+    return (
+      <Tooltip key={s.id} title={s.title} arrow placement="top">
+        <SuiteButton
+          active={isRunningThis ? 1 : 0}
+          toneColor={toneColor}
+          disabled={running}
+          onClick={() => runSuite(s.id)}
+        >
+          {s.label}
+        </SuiteButton>
+      </Tooltip>
+    );
+  };
+
   return (
     <PageWrap data-screen-label="Validation">
       <ControlBar>
-        <ControlLabel>VALIDATION SUITES</ControlLabel>
-        {suites.map((s) => {
-          const suiteState = perSuite[s.id];
-          const isRunningThis = runningKey === s.id;
-          let toneColor = C.idle;
-          if (suiteState?.status === "done") toneColor = suiteState.allPassed ? C.green : C.red;
-          else if (suiteState?.status === "error") toneColor = C.red;
-          else if (isRunningThis) toneColor = C.amber;
-          return (
-            <Tooltip key={s.id} title={s.title} arrow placement="top">
-              <SuiteButton
-                active={isRunningThis ? 1 : 0}
-                toneColor={toneColor}
-                disabled={running}
-                onClick={() => runSuite(s.id)}
-              >
-                {s.label}
-              </SuiteButton>
-            </Tooltip>
-          );
-        })}
+        <ControlLabel>AGENT SUITES</ControlLabel>
+        {agentSuites.map(renderSuiteButton)}
         <ConnRow>
           <ConnDot dotcolor={connected ? C.green : C.red} />
           {connected ? "connected" : "reconnecting…"}
         </ConnRow>
         <RunAllButton disabled={running || !connected} onClick={() => runAll(allKeys)}>
           RUN ALL
+        </RunAllButton>
+      </ControlBar>
+
+      <ControlBar>
+        <ControlLabel>SCENARIOS · SRS §8</ControlLabel>
+        {scenarioSuites.map(renderSuiteButton)}
+        <RunAllButton disabled={running || !connected} onClick={() => runAllScenarios(scenarioKeys)}>
+          RUN ALL SCENARIOS
         </RunAllButton>
       </ControlBar>
 
@@ -175,9 +175,15 @@ function ValidationPage() {
           </ProgressMeta>
         </ProgressHeader>
         <ProgressBody>
-          {!running && liveFeed.length === 0 && (
+          {!running && liveFeed.length === 0 && !lastRunAt && (
             <IdleNote>
               {lastError ? `Error: ${lastError}` : "No validation run yet — pick a suite above, or Run All."}
+            </IdleNote>
+          )}
+
+          {!running && liveFeed.length === 0 && lastRunAt && (
+            <IdleNote>
+              Showing the last validation run ({new Date(lastRunAt).toLocaleString()}) — pick a suite above to run a fresh one.
             </IdleNote>
           )}
 
@@ -340,24 +346,11 @@ function ValidationPage() {
       <ChartsPanel>
         <ChartsHeaderRow>
           <DetailTitle>VALIDATION CHARTS</DetailTitle>
-          <ProgressMeta>{chartUrls.length > 0 ? `${chartUrls.length} figure(s)` : "none yet"}</ProgressMeta>
         </ChartsHeaderRow>
-        {chartUrls.length === 0 ? (
-          <EmptyRow>No charts generated yet — run System or Scenarios for the full figure set.</EmptyRow>
+        {metrics ? (
+          <ValidationCharts metrics={metrics} />
         ) : (
-          Object.entries(chartGroups).map(([group, items]) => (
-            <div key={group}>
-              <ProgressMeta style={{ marginBottom: 8 }}>{group}</ProgressMeta>
-              <ChartsGrid>
-                {items.map((item) => (
-                  <ChartCard key={item.url}>
-                    <ChartImg src={item.url} alt={item.title} loading="lazy" />
-                    <ChartCaption>{item.title}</ChartCaption>
-                  </ChartCard>
-                ))}
-              </ChartsGrid>
-            </div>
-          ))
+          <EmptyRow>No chart data yet — run a suite above.</EmptyRow>
         )}
       </ChartsPanel>
     </PageWrap>

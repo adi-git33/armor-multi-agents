@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { getBackendOrigin, getValidationWsUrl } from "../dashboard/utils";
 
 const WS_URL = getValidationWsUrl();
@@ -11,7 +11,7 @@ const initialState = {
   liveFeed: [],        // most-recent-first, capped
   targetTable: null,
   overallVerdict: null,
-  charts: [],
+  metrics: null,
   lastRunAt: null,
   lastError: null,
 };
@@ -68,12 +68,45 @@ function reducer(state, action) {
           allOk: action.allOk,
           wallSec: action.wallSec,
         },
-        charts: action.charts,
+        metrics: action.metrics,
         lastRunAt: Date.now(),
       };
     }
     case "run-error": {
       return { ...state, running: false, runningKey: null, lastError: action.message };
+    }
+    case "hydrate": {
+      // Only applies before the user has run (or started running) anything
+      // in this session — a fetched-on-mount snapshot must never clobber
+      // live/just-finished results.
+      if (state.running || state.lastRunAt !== null) return state;
+      const perSuite = {};
+      for (const [key, s] of Object.entries(action.data.per_suite || {})) {
+        perSuite[key] = {
+          label: s.label,
+          status: s.status,
+          results: s.results || [],
+          passCount: s.pass_count,
+          totalCount: s.total_count,
+          allPassed: s.all_passed,
+          wallSec: s.wall_sec,
+          errorMessage: s.error_message,
+        };
+      }
+      return {
+        ...state,
+        perSuite,
+        targetTable: action.data.target_table || null,
+        overallVerdict: {
+          total: action.data.total,
+          passed: action.data.passed,
+          failed: action.data.failed,
+          allOk: action.data.all_ok,
+          wallSec: action.data.wall_sec,
+        },
+        metrics: action.data.metrics || null,
+        lastRunAt: action.data.timestamp ? action.data.timestamp * 1000 : Date.now(),
+      };
     }
     default:
       return state;
@@ -92,6 +125,17 @@ export function useValidationSocket() {
       .then((r) => r.json())
       .then((d) => setSuites(d.suites || []))
       .catch(() => setSuites([]));
+  }, []);
+
+  // Reload whatever the last validation run (from any previous session)
+  // produced, so reopening the page doesn't start from a blank slate.
+  useEffect(() => {
+    fetch(`${getBackendOrigin()}/api/validation/last`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && d.available) dispatch({ type: "hydrate", data: d });
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -154,7 +198,7 @@ export function useValidationSocket() {
               allOk: evt.all_ok,
               wallSec: evt.wall_sec,
               targetTable: evt.target_table,
-              charts: evt.charts || [],
+              metrics: evt.metrics || null,
             });
             break;
           case "error":
@@ -193,10 +237,15 @@ export function useValidationSocket() {
     [state.running]
   );
 
-  const chartUrls = useMemo(
-    () => state.charts.map((path) => `${getBackendOrigin()}${path}?t=${state.lastRunAt || 0}`),
-    [state.charts, state.lastRunAt]
+  const runAllScenarios = useCallback(
+    (scenarioKeys) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN || state.running) return;
+      dispatch({ type: "run-start", keys: scenarioKeys });
+      ws.send(JSON.stringify({ type: "run", suite: "all_scenarios" }));
+    },
+    [state.running]
   );
 
-  return { ...state, connected, suites, runSuite, runAll, chartUrls };
+  return { ...state, connected, suites, runSuite, runAll, runAllScenarios };
 }
