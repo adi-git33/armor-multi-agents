@@ -1,10 +1,20 @@
 import { C } from "./constants";
 
+export function getBackendOrigin() {
+  return import.meta.env.VITE_BACKEND_ORIGIN || "http://localhost:8000";
+}
+
 export function getWsUrl() {
-  const backendOrigin = import.meta.env.VITE_BACKEND_ORIGIN || "http://localhost:8000";
-  const url = new URL(backendOrigin);
+  const url = new URL(getBackendOrigin());
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/ws";
+  return url.toString();
+}
+
+export function getValidationWsUrl() {
+  const url = new URL(getBackendOrigin());
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/api/validation/ws";
   return url.toString();
 }
 

@@ -57,7 +57,7 @@ function TopologyStage({
   const [stageXScale, setStageXScale] = useState(1);
 
   useEffect(() => {
-    const BASE_HEIGHT = 700;
+    const BASE_HEIGHT = 780;
     const BASE_WIDTH = 1180;
     const MIN_SCALE = 0.5;
 
@@ -107,7 +107,7 @@ function TopologyStage({
       <StageViewport ref={viewportRef}>
       <StageScaleFrame yscale={stageYScale} xscale={stageXScale}>
       <StageSurface yscale={stageYScale} xscale={stageXScale}>
-        <LayerSvg width="1180" height="700" viewBox="0 0 1180 700">
+        <LayerSvg width="1180" height="780" viewBox="0 0 1180 780">
           {links.map((l, i) => (
             <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.color} strokeWidth={l.w} strokeLinecap="round" />
           ))}
@@ -124,44 +124,44 @@ function TopologyStage({
         <PacketCanvas ref={canvasRef} />
 
         <AttackerNode activeattack={scenarioAtk ? 1 : 0}>
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke={scenarioAtk ? C.red : "#cdd5dd"} strokeWidth="1.6">
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke={scenarioAtk ? C.red : "#cdd5dd"} strokeWidth="1.6">
             <path d="M6 17h11a3.5 3.5 0 0 0 .5-6.96A5 5 0 0 0 8 9.2 4 4 0 0 0 6 17z" />
           </svg>
         </AttackerNode>
-        <LabelGroup leftpos={60} toppos={158} widthval={160}>
+        <LabelGroup leftpos={60} toppos={168} widthval={160}>
           <LabelTitle titlecolor={scenarioAtk ? C.red : "#2b3440"}>Attacker / WAN</LabelTitle>
           <LabelSubLight>0.0.0.0/0</LabelSubLight>
         </LabelGroup>
 
         <LegitNode>
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="1.6">
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="1.6">
             <path d="M6 17h11a3.5 3.5 0 0 0 .5-6.96A5 5 0 0 0 8 9.2 4 4 0 0 0 6 17z" />
           </svg>
         </LegitNode>
-        <LabelGroup leftpos={220} toppos={158} widthval={160}>
+        <LabelGroup leftpos={220} toppos={168} widthval={160}>
           <LabelTitle titlecolor={C.green}>Legitimate Clients</LabelTitle>
           <LabelSubLight>trusted internet traffic</LabelSubLight>
         </LabelGroup>
 
         <EdgeNode>
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#5b6675" strokeWidth="1.5">
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#5b6675" strokeWidth="1.5">
             <circle cx="12" cy="12" r="3" />
             <path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l2.5 2.5M16.5 16.5L19 19M19 5l-2.5 2.5M7.5 16.5L5 19" />
           </svg>
         </EdgeNode>
-        <LabelGroup leftpos={134} toppos={368} widthval={172}>
+        <LabelGroup leftpos={134} toppos={378} widthval={172}>
           <LabelTitle>Edge Router</LabelTitle>
           <LabelSub>segment gateway</LabelSub>
           <LabelSubLight>{selectedSegData?.cidr || "—"}</LabelSubLight>
         </LabelGroup>
 
         <CoreNode>
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#5b6675" strokeWidth="1.5">
+          <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#5b6675" strokeWidth="1.5">
             <rect x="3" y="8" width="18" height="9" rx="2" />
             <path d="M7 12h.01M11 12h.01M15 12h.01" />
           </svg>
         </CoreNode>
-        <LabelGroup leftpos={344} toppos={366} widthval={172}>
+        <LabelGroup leftpos={344} toppos={374} widthval={172}>
           <LabelTitle>Core Switch</LabelTitle>
           <LabelSub>switch fabric</LabelSub>
         </LabelGroup>
@@ -178,7 +178,7 @@ function TopologyStage({
               selected={selAgent === tmaId ? 1 : 0}
             >
               <TmaIconWrap iconbg={`${sc2}18`}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={sc2} strokeWidth="1.8">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={sc2} strokeWidth="1.8">
                   <circle cx="11" cy="11" r="7" />
                   <path d="M21 21l-4.3-4.3" />
                 </svg>
@@ -203,7 +203,7 @@ function TopologyStage({
               bordercolor={hb}
             >
               <HostIconWrap iconbg={`${hc}14`}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={hc} strokeWidth="1.5">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={hc} strokeWidth="1.5">
                   <rect x="4" y="3" width="16" height="7" rx="1.5" />
                   <rect x="4" y="14" width="16" height="7" rx="1.5" />
                   <path d="M8 6.5h.01M8 17.5h.01" />
@@ -228,7 +228,7 @@ function TopologyStage({
         {BUS_AGENTS.map((ba) => {
           const ag = agents[ba.id];
           const sc2 = stateColor(ag?.state || "idle");
-          const posX = { "ACA:1": 150, "TIA:1": 410, "RCA:1": 640, "RAA:1": 890 }[ba.id] || 0;
+          const posX = { "ACA:1": 138, "TIA:1": 398, "RCA:1": 628, "RAA:1": 878 }[ba.id] || 0;
           const selected = selAgent === ba.id;
           return (
             <AgentChip

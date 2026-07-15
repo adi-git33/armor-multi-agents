@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 # Ensure intra-backend imports (bus/core/simulation/agents) resolve whether
 # this module is loaded as `server` or `backend.server`.
@@ -1018,6 +1019,17 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+
+# Validation suite runner -- separate page/concern from the live dashboard
+# above. The router owns /api/validation/suites + /api/validation/ws;
+# charts/ is mounted here (not inside the router) since StaticFiles needs
+# an app-level mount point.
+from validation.api import router as validation_router  # noqa: E402
+
+app.include_router(validation_router)
+_CHARTS_DIR = pathlib.Path(__file__).parent / "validation" / "charts"
+_CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/charts", StaticFiles(directory=str(_CHARTS_DIR)), name="charts")
 
 
 async def _broadcast_loop():

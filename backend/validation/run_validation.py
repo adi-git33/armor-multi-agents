@@ -35,6 +35,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Also put backend/validation/ itself on sys.path. Only matters when this
+# module is *imported* (e.g. by validation/api.py) rather than run as the
+# __main__ script — Python auto-prepends a script's own directory, but not
+# a plain import's. Every SUITES module below is imported by bare name
+# ("validate_tma", not "validation.validate_tma"), so it must resolve here.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from validation.helpers import ValidationSuite, ValidationResult, GREEN, RED, BOLD, RESET, YELLOW, CYAN
 from validation.visualize_results import export_charts, print_chart_summary
@@ -126,27 +132,10 @@ def _print_master_summary(
     print(f"  {'Target / Constraint':<35} {'Threshold':<22} {'Observed':<22} {'Verdict'}")
     print("  " + "─" * 76)
 
-    targets = [
-        ("Detection Rate (DR)",          "> 90%",      _find(all_results, "FR-29", "DR")),
-        ("False Positive Rate (FPR)",     "< 8% / 10%", _find(all_results, "FR-09", "FPR")),
-        ("MTTR (Response)",               "< 1000 ms",  _find(all_results, "FR-30", "MTTR")),
-        ("System Availability",           "> 99%",      _find(all_results, "FR-31", "avail")),
-        ("Resource Overhead",             "< 40% host", _find(all_results, "FR-23", "overhead")),
-        ("Auction completion",            "< 300 ms",   _find(all_results, "FR-19", "auction")),
-        ("Vote cycle",                    "< 300 ms",   _find(all_results, "S6",    "vote")),
-        ("Coalition formation",           "< 1 s",      _find(all_results, "S2",    "coalition")),
-        ("Agent failure coverage reassign","< 2 s",     _find(all_results, "S5",    "reassign")),
-        ("Social Welfare (SW)",           "≥ 0.80",     _find(all_results, "SW",    "Social Welfare")),
-    ]
-
-    for name, threshold, result in targets:
-        if result:
-            obs     = str(result.observed)[:20] if result.observed else "—"
-            verdict = f"{GREEN}PASS{RESET}" if result.passed else f"{RED}FAIL{RESET}"
-        else:
-            obs     = "not run"
-            verdict = f"{YELLOW}SKIP{RESET}"
-        print(f"  {name:<35} {threshold:<22} {obs:<22} [{verdict}]")
+    for row in build_srs_target_table(all_results):
+        color   = {"PASS": GREEN, "FAIL": RED, "SKIP": YELLOW}[row["verdict"]]
+        verdict = f"{color}{row['verdict']}{RESET}"
+        print(f"  {row['name']:<35} {row['threshold']:<22} {row['observed']:<22} [{verdict}]")
 
     print("\n" + "=" * w)
     print(f"  Final verdict: {GREEN + BOLD if all_ok else RED + BOLD}"
@@ -225,6 +214,54 @@ def _find(
         if r.req_id == req_id:
             return r
     return None
+
+
+# SRS §7.3 target mapping — the 10-row headline table. Defined once here so
+# the CLI (_print_master_summary) and the web API (validation/api.py) build
+# the exact same rows from the exact same results, instead of two hand-kept
+# copies drifting apart.
+SRS_TARGETS: list[tuple[str, str, str, str]] = [
+    # (display name, threshold text, req_id, label keyword for _find)
+    ("Detection Rate (DR)",              "> 90%",      "FR-29", "DR"),
+    ("False Positive Rate (FPR)",         "< 8% / 10%", "FR-09", "FPR"),
+    ("MTTR (Response)",                   "< 1000 ms",  "FR-30", "MTTR"),
+    ("System Availability",               "> 99%",      "FR-31", "avail"),
+    ("Resource Overhead",                 "< 40% host", "FR-23", "overhead"),
+    ("Auction completion",                "< 300 ms",   "FR-19", "auction"),
+    ("Vote cycle",                        "< 300 ms",   "S6",    "vote"),
+    ("Coalition formation",               "< 1 s",      "S2",    "coalition"),
+    ("Agent failure coverage reassign",   "< 2 s",      "S5",    "reassign"),
+    ("Social Welfare (SW)",               "≥ 0.80",     "SW",    "Social Welfare"),
+]
+
+
+def build_srs_target_table(
+    all_results: list[tuple[str, ValidationResult]],
+) -> list[dict]:
+    """Build the 10-row SRS §7.3 target-mapping table as plain dicts
+    (name / threshold / observed / verdict / req_id), independent of any
+    print formatting. Single source of truth for both the CLI summary and
+    the /api/validation WebSocket's run-completed event."""
+    rows: list[dict] = []
+    for name, threshold, req_id, keyword in SRS_TARGETS:
+        result = _find(all_results, req_id, keyword)
+        if result is not None:
+            rows.append({
+                "name":      name,
+                "threshold": threshold,
+                "observed":  str(result.observed)[:20] if result.observed is not None else "—",
+                "verdict":   "PASS" if result.passed else "FAIL",
+                "req_id":    req_id,
+            })
+        else:
+            rows.append({
+                "name":      name,
+                "threshold": threshold,
+                "observed":  "not run",
+                "verdict":   "SKIP",
+                "req_id":    req_id,
+            })
+    return rows
 
 
 async def main(argv=None) -> int:

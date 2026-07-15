@@ -18,19 +18,19 @@ export const POS = {
   edge: { x: 220, y: 330 },
   core: { x: 430, y: 330 },
   tma: { x: 430, y: 500 },
-  A: { x: 770, y: 205 },
-  B: { x: 1010, y: 205 },
-  C: { x: 770, y: 335 },
-  D: { x: 1010, y: 335 },
-  E: { x: 770, y: 465 },
+  A: { x: 728, y: 205 },
+  B: { x: 1019, y: 205 },
+  C: { x: 728, y: 335 },
+  D: { x: 1019, y: 335 },
+  E: { x: 728, y: 465 },
   aca1: { x: 226, y: 605 },
   tia1: { x: 486, y: 605 },
   rca1: { x: 716, y: 605 },
   raa1: { x: 966, y: 605 },
 };
 
-export const HOSTLEFT = { A: 664, B: 904, C: 664, D: 904, E: 664 };
-export const HOSTTOP = { A: 172, B: 172, C: 302, D: 302, E: 432 };
+export const HOSTLEFT = { A: 605, B: 896, C: 605, D: 896, E: 605 };
+export const HOSTTOP = { A: 165, B: 165, C: 295, D: 295, E: 425 };
 
 export const SCENARIOS = [
   { id: "calm", label: "Calm Baseline" },
@@ -66,4 +66,6 @@ export const LEGEND = [
   { color: "#8b5cf6", label: "QUARANTINED" },
   { color: C.blue, label: "ACTIVE AGENT" },
   { color: C.idle, label: "IDLE AGENT" },
+  { color: C.green, label: "LEGIT PACKET" },
+  { color: C.red, label: "ATTACK PACKET" },
 ];

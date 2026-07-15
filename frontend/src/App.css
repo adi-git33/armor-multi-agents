@@ -39,8 +39,9 @@ button {
 }
 
 .dashboard-app {
-  height: 100vh;
-  margin: 0 auto;
+  height: 100%;
+  width: 100%;
+  margin: 0;
   background: #eaedf1;
   color: #3a4452;
   display: flex;
@@ -52,10 +53,17 @@ button {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
-  gap: 12px;
+  grid-template-columns: var(--topology-width, minmax(0, 2fr)) 12px minmax(320px, 1fr);
   padding: 0 16px;
   align-items: stretch;
+}
+
+.dashboard-main.is-resizing {
+  cursor: col-resize;
+}
+
+.dashboard-main.is-resizing * {
+  user-select: none;
 }
 
 .dashboard-spacer {

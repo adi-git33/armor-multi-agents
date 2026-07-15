@@ -8,10 +8,34 @@ Provides:
 """
 
 from __future__ import annotations
+import contextvars
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Optional
+
+
+# ── live result-streaming hook (used by validation/api.py) ────────────
+# A ValidationSuite normally just accumulates results and prints them at
+# the end (see print_results()). The web API needs to push each check to
+# connected browsers AS it happens (some suites run for over a minute),
+# without validate_*.py files knowing anything about HTTP/WebSockets.
+# ContextVar rather than a module global: safe if suites ever run
+# concurrently in the same process, and a no-op (default None) for every
+# existing CLI call site.
+_on_result_cv: "contextvars.ContextVar[Optional[Callable[[ValidationResult], None]]]" = (
+    contextvars.ContextVar("on_result", default=None)
+)
+
+
+def set_result_callback(cb: Callable[["ValidationResult"], None]) -> contextvars.Token:
+    """Register a callback invoked synchronously on every suite.check()/add().
+    Returns a token — pass it to reset_result_callback() when done."""
+    return _on_result_cv.set(cb)
+
+
+def reset_result_callback(token: contextvars.Token) -> None:
+    _on_result_cv.reset(token)
 
 
 # ── colours (disabled when not a tty) ─────────────────────────────────
@@ -54,6 +78,9 @@ class ValidationSuite:
 
     def add(self, result: ValidationResult) -> None:
         self.results.append(result)
+        cb = _on_result_cv.get()
+        if cb:
+            cb(result)
 
     def check(
         self,
@@ -66,6 +93,9 @@ class ValidationSuite:
     ) -> ValidationResult:
         r = ValidationResult(req_id, label, passed, observed, expected, note)
         self.results.append(r)
+        cb = _on_result_cv.get()
+        if cb:
+            cb(r)
         return r
 
     # ── printing ───────────────────────────────────────────────────────
