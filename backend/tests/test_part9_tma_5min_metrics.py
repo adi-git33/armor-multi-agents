@@ -24,7 +24,13 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from agents.tma import ALERT_COOLDOWN, ANOMALY_THRESHOLD, PORT_SCAN_COOLDOWN, TrafficMonitorAgent
+from agents.tma import (
+    ALERT_COOLDOWN,
+    ANOMALY_THRESHOLD,
+    ESCALATION_THRESHOLD,
+    PORT_SCAN_COOLDOWN,
+    TrafficMonitorAgent,
+)
 from bus.message_bus import MessageBus
 from core.messages import Topic
 from core.models import Packet
@@ -302,6 +308,14 @@ def _check_cooldown_spacing(
     ordered = sorted(alerts, key=lambda a: a.ts)
     for prev, cur in zip(ordered, ordered[1:]):
         if (cur.ts - prev.ts) + slop < cooldown:
+            # Escalation re-alert exception: TMA may bypass the cooldown
+            # once per window when the deviation crosses ESCALATION_THRESHOLD
+            # after the previous alert went out below it. (Port-scan alerts
+            # carry deviation 0.0, so this can never excuse scan spacing.)
+            prev_dev = abs(prev.content.get("deviation", 0.0))
+            cur_dev  = abs(cur.content.get("deviation", 0.0))
+            if cur_dev >= ESCALATION_THRESHOLD and prev_dev < ESCALATION_THRESHOLD:
+                continue
             return False
     return True
 
