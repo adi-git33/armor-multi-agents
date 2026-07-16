@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+validation/charts/
+validation/last_run.json
+validation/_mnt_test.txt

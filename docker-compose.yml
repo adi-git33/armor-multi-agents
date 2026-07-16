@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    # Persist the live dashboard's cumulative detection tally across
+    # container restarts (same file the bare-metal server uses).
+    volumes:
+      - ./backend/models/aca_metrics.json:/app/models/aca_metrics.json
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The browser (not the container) connects to the backend, so
+        # this must be the host-reachable origin.
+        VITE_BACKEND_ORIGIN: http://localhost:8000
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
