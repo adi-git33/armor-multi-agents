@@ -1,8 +1,12 @@
+# Host ports are overridable when 8000/3000 are taken by something else:
+#   ARMOR_BACKEND_PORT=8100 ARMOR_FRONTEND_PORT=3100 docker compose up --build
+# (--build matters when changing the backend port: the browser-facing origin
+# is baked into the frontend bundle at build time.)
 services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "${ARMOR_BACKEND_PORT:-8000}:8000"
     # Persist the live dashboard's cumulative detection tally across
     # container restarts (same file the bare-metal server uses).
     volumes:
@@ -14,8 +18,8 @@ services:
       args:
         # The browser (not the container) connects to the backend, so
         # this must be the host-reachable origin.
-        VITE_BACKEND_ORIGIN: http://localhost:8000
+        VITE_BACKEND_ORIGIN: http://localhost:${ARMOR_BACKEND_PORT:-8000}
     ports:
-      - "3000:80"
+      - "${ARMOR_FRONTEND_PORT:-3000}:80"
     depends_on:
       - backend
