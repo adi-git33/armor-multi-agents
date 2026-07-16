@@ -3,6 +3,7 @@ import { C, SCENARIOS } from "../../dashboard/constants";
 import { fmt } from "../../dashboard/utils";
 import {
   Clock,
+  ControlButton,
   MetricCell,
   MetricLabel,
   MetricsBarWrap,
@@ -13,19 +14,19 @@ import {
   ScenarioPanel,
 } from "./ScenarioMetricsBar.styled";
 
-function ScenarioMetricsBar({ scenario, elapsed, metrics, wsReady, sendScenario, selectedSeg }) {
+function ScenarioMetricsBar({ scenario, elapsed, metrics, wsReady, sendScenario, sendControl, running, selectedSeg }) {
   const metricRows = [
     {
       label: "DETECTION RATE",
       value: `${(metrics.dr * 100).toFixed(1)} %`,
       color: metrics.dr > 0.9 ? C.green : metrics.dr > 0.7 ? C.amber : C.red,
-      info: "Real attacks correctly caught, out of every real attack that happened (missed attacks count against this too).",
+      info: "Attack-window reports of the right threat type, out of all such reports. The first seconds after an attack starts are a grace window (ramp-up counts as latency, not a miss), mirroring the offline validation methodology.",
     },
     {
       label: "FALSE POSITIVE",
       value: `${(metrics.fpr * 100).toFixed(1)} %`,
       color: metrics.fpr < 0.08 ? C.green : C.amber,
-      info: "Genuinely calm moments that ACA wrongly flagged as a threat, out of all genuinely calm moments.",
+      info: "Genuinely calm moments that ACA wrongly flagged as a threat, out of all genuinely calm moments. Reports in the first seconds after an attack ends are residual and not counted.",
     },
     {
       label: "MTTR",
@@ -57,7 +58,7 @@ function ScenarioMetricsBar({ scenario, elapsed, metrics, wsReady, sendScenario,
             <ScenarioButton
               key={sc.id}
               onClick={() => sendScenario(sc.id, selectedSeg)}
-              disabled={!wsReady}
+              disabled={!wsReady || !running}
               size="small"
               active={active ? 1 : 0}
             >
@@ -65,7 +66,29 @@ function ScenarioMetricsBar({ scenario, elapsed, metrics, wsReady, sendScenario,
             </ScenarioButton>
           );
         })}
-        <Clock>{fmt(elapsed)}</Clock>
+        <Tooltip title={running ? "Pause the simulation (traffic, attacks and the clock freeze)" : "Resume the simulation"} arrow placement="top">
+          <span>
+            <ControlButton
+              onClick={() => sendControl(running ? "pause" : "resume")}
+              disabled={!wsReady}
+              aria-label={running ? "Pause simulation" : "Resume simulation"}
+            >
+              {running ? "⏸" : "▶"}
+            </ControlButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Reset the detection metrics (clears the persisted TP/FP/FN/TN tally)" arrow placement="top">
+          <span>
+            <ControlButton
+              onClick={() => sendControl("reset_metrics")}
+              disabled={!wsReady}
+              aria-label="Reset detection metrics"
+            >
+              ↺
+            </ControlButton>
+          </span>
+        </Tooltip>
+        <Clock paused={running ? 0 : 1}>{fmt(elapsed)}{running ? "" : " ⏸"}</Clock>
       </ScenarioPanel>
 
       <MetricsPanel>

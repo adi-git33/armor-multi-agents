@@ -21,7 +21,7 @@ const TOPOLOGY_WIDTH_STORAGE_KEY = "armor.dashboard.topologyWidth";
 function LiveDashboardPage() {
   const [selectedSeg, setSelSeg] = useState("public-facing");
   const [selAgent, setSelAgent] = useState(null);
-  const { state, connected, wsReady, sendScenario } = useDashboardSocket();
+  const { state, connected, wsReady, sendScenario, sendControl } = useDashboardSocket();
   const canvasRef = useRef(null);
 
   const mainRef = useRef(null);
@@ -127,6 +127,8 @@ function LiveDashboardPage() {
         metrics={metrics}
         wsReady={wsReady}
         sendScenario={sendScenario}
+        sendControl={sendControl}
+        running={state?.running ?? true}
         selectedSeg={activeSegId || selectedSeg}
       />
 

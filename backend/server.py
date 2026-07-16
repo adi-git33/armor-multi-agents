@@ -68,6 +68,22 @@ def _save_aca_metrics(tp: int, fp: int, fn: int, tn: int) -> None:
     ACA_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     ACA_METRICS_PATH.write_text(json.dumps({"tp": tp, "fp": fp, "fn": fn, "tn": tn}))
 
+# ── Live confusion-matrix accounting windows ──────────────────────────────────
+# The live dashboard flips ground truth the instant a scenario button is
+# clicked, but the attack itself takes a few seconds to manifest (DDoS ramp)
+# and a few seconds to drain after it stops. The offline validation suite
+# accounts for this with warmup/buffer windows (§V-SYS-01); these two windows
+# mirror that methodology for the live metrics so a report during the ramp
+# counts as detection *latency*, not a miss, and a report just after "calm"
+# is residual, not a false positive.
+ATTACK_GRACE_SECS = 5.0   # after attack start: NOISE here is not an FN
+CALM_LINGER_SECS  = 10.0  # after attack end: threat flags here are not FPs
+
+# Which TMA alert modality carries each attack type — a NOISE verdict on a
+# volume alert during a *port-scan* attack is correct (the scan doesn't move
+# pps), so only same-modality NOISE verdicts can count as misses.
+ATTACK_MODALITY = {"DDOS": "VOLUME_SPIKE", "PORT_SCAN": "PORT_SCAN"}
+
 # ── Segment + scenario metadata ────────────────────────────────────────────────
 SEGMENTS = [
     {"id": "public-facing", "code": "PUB", "name": "Public-Facing Services", "cidr": "172.16.0.0/24"},
@@ -158,6 +174,11 @@ class StateCollector:
 
     def __init__(self):
         self._start = time.monotonic()
+        # Play/pause bookkeeping: while paused the session clock freezes, so
+        # elapsed() (and everything derived from it — availability, log
+        # timestamps) excludes paused stretches.
+        self._paused_at: float | None = None
+        self._paused_total = 0.0
         self.lamport = 0
         self.logs: deque = deque(maxlen=50)
         self.viz_events: deque = deque(maxlen=400)
@@ -183,6 +204,10 @@ class StateCollector:
         # Set/cleared by set_scenario(); untouched by quarantine (the
         # attacker keeps running even while its traffic is blocked).
         self.active_attacks: dict[str, str] = {}
+        # When each segment's current attack began / last attack ended —
+        # drives the ATTACK_GRACE_SECS / CALM_LINGER_SECS windows above.
+        self.attack_started: dict[str, float] = {}
+        self.attack_ended:   dict[str, float] = {}
 
         self.mttr_ms: list[float] = []
         self._disruption_start: float | None = None
@@ -243,12 +268,31 @@ class StateCollector:
     # ------------------------------------------------------------------
 
     def _now(self) -> str:
-        t = time.monotonic() - self._start
+        t = self.elapsed()
         m, s = divmod(int(t), 60)
         return f"{m:02d}:{s:02d}.{int(t * 1000) % 1000:03d}"
 
     def elapsed(self) -> float:
-        return time.monotonic() - self._start
+        ref = self._paused_at if self._paused_at is not None else time.monotonic()
+        return ref - self._start - self._paused_total
+
+    def pause_clock(self) -> None:
+        if self._paused_at is not None:
+            return
+        self._paused_at = time.monotonic()
+        # Freeze the availability disruption stopwatch too — paused time
+        # must not count as quarantine downtime.
+        if self._disruption_start is not None:
+            self.disruption_secs += self._paused_at - self._disruption_start
+            self._disruption_start = None
+
+    def resume_clock(self) -> None:
+        if self._paused_at is None:
+            return
+        self._paused_total += time.monotonic() - self._paused_at
+        self._paused_at = None
+        if self.quarantined_segs:
+            self._disruption_start = time.monotonic()
 
     def _log(self, agent: str, color: str, text: str, perf: str = ""):
         self.lamport += 1
@@ -395,18 +439,31 @@ class StateCollector:
         # Ground truth for this segment right now (set by SimEngine.set_scenario()) —
         # lets tp/fp/fn/tn reflect whether ACA's call was actually correct,
         # not just what string it happened to publish.
-        under_attack = seg in self.active_attacks
+        now          = time.monotonic()
+        attack_type  = self.active_attacks.get(seg)
+        under_attack = attack_type is not None
+        in_grace  = (under_attack and
+                     now - self.attack_started.get(seg, now) < ATTACK_GRACE_SECS)
+        in_linger = (not under_attack and
+                     now - self.attack_ended.get(seg, float("-inf")) < CALM_LINGER_SECS)
+        src_alert = c.get("source_alert", "")
 
         if clf == "NOISE":
-            if under_attack:
-                self.fn += 1   # a real attack, missed
+            if under_attack and src_alert == ATTACK_MODALITY.get(attack_type):
+                # NOISE on the attack's own modality is a miss — unless the
+                # attack just started and is still ramping (grace window).
+                if not in_grace:
+                    self.fn += 1
             else:
-                self.tn += 1   # correctly quiet
+                self.tn += 1   # correctly quiet (or off-modality chatter)
         else:
             if under_attack:
-                self.tp += 1
-            else:
-                self.fp += 1
+                if clf == attack_type:
+                    self.tp += 1
+                # mismatched threat type mid-attack (e.g. DDOS verdict during
+                # a port scan): neither a hit nor a calm-moment error — skip
+            elif not in_linger:
+                self.fp += 1   # genuinely calm moment flagged as a threat
 
             self.ag_state["ACA:1"] = "active"
             self.ag_task["ACA:1"]  = f"classifying · severity {sev:.2f}"
@@ -633,6 +690,16 @@ class StateCollector:
         if self._disruption_start is not None and not self.quarantined_segs:
             self.disruption_secs += time.monotonic() - self._disruption_start
             self._disruption_start = None
+
+    # ------------------------------------------------------------------
+    # Metrics reset (frontend "reset metrics" control)
+    # ------------------------------------------------------------------
+
+    def reset_metrics(self) -> None:
+        """Zero the persisted confusion matrix — lets a demo start from a
+        clean slate instead of inheriting every historical session's tally."""
+        self.tp = self.fp = self.fn = self.tn = 0
+        _save_aca_metrics(0, 0, 0, 0)
 
     # ------------------------------------------------------------------
     # Metrics calculation
@@ -958,6 +1025,26 @@ class SimEngine:
             task.cancel()
         self._atk_tasks.clear()
 
+    def _launch_attacker(self, name: str, target: str) -> None:
+        """Start the attacker for scenario `name` on `target` and open the
+        detection grace window. Used by set_scenario() and resume()."""
+        if name == "ddos":
+            atk = DDoSAttacker(
+                f"DDoS:{target}", target, self.gen,
+                intensity_multiplier=6.0, ramp_seconds=3.0,
+            )
+            self._atk_tasks[target] = asyncio.create_task(atk.launch(duration=3600))
+            self.sc.active_attacks[target] = "DDOS"
+            self.sc.attack_started[target] = time.monotonic()
+        elif name == "scan":
+            scanner = PortScanner(
+                f"Scan:{target}", target, self.gen,
+                src_ip="45.33.32.156", probe_interval=0.3,
+            )
+            self._atk_tasks[target] = asyncio.create_task(scanner.launch(duration=3600))
+            self.sc.active_attacks[target] = "PORT_SCAN"
+            self.sc.attack_started[target] = time.monotonic()
+
     async def set_scenario(self, name: str, segment: str | None = None):
         """Set the scenario for ONE segment (falls back to a sensible
         default target per scenario if `segment` is missing or not a real
@@ -975,25 +1062,54 @@ class SimEngine:
         self.sc.reset_segment(target)
         self.segment_scenarios[target] = name
 
-        if name == "ddos":
-            atk = DDoSAttacker(
-                f"DDoS:{target}", target, self.gen,
-                intensity_multiplier=6.0, ramp_seconds=3.0,
-            )
-            self._atk_tasks[target] = asyncio.create_task(atk.launch(duration=3600))
-            self.sc.active_attacks[target] = "DDOS"
+        # Whatever was running on this segment (if anything) ends now —
+        # starts the CALM_LINGER_SECS window for FP accounting.
+        if target in self.sc.active_attacks:
+            self.sc.attack_ended[target] = time.monotonic()
 
-        elif name == "scan":
-            scanner = PortScanner(
-                f"Scan:{target}", target, self.gen,
-                src_ip="45.33.32.156", probe_interval=0.3,
-            )
-            self._atk_tasks[target] = asyncio.create_task(scanner.launch(duration=3600))
-            self.sc.active_attacks[target] = "PORT_SCAN"
+        if name in ("ddos", "scan"):
+            self._launch_attacker(name, target)
         else:
             # "calm" → attacker already stopped above; this segment has no
             # active ground-truth attack anymore.
             self.sc.active_attacks.pop(target, None)
+
+    # ------------------------------------------------------------------
+    # Play / pause
+    # ------------------------------------------------------------------
+
+    async def pause(self) -> None:
+        """Freeze the simulation: stop traffic + attackers and the session
+        clock, but keep every segment's scenario, quarantine and incident
+        state intact so resume() continues the same session."""
+        if not self.running:
+            return
+        self.running = False
+        # Attacker tasks are cancelled (their finally-blocks clear the pps
+        # overlays); segment_scenarios remembers what to relaunch on resume.
+        self._stop_all_attackers()
+        if self.gen:
+            self.gen.stop()
+        if self._gen_task:
+            self._gen_task.cancel()
+            self._gen_task = None
+        self.sc.pause_clock()
+        logger.info("SimEngine paused")
+
+    async def resume(self) -> None:
+        if self.running:
+            return
+        self.running = True
+        self.sc.resume_clock()
+        if self.gen:
+            self._gen_task = asyncio.create_task(self.gen.run())
+        # Relaunch each segment's attacker. _launch_attacker() refreshes
+        # attack_started so the re-ramp after resume gets a fresh grace
+        # window instead of being scored as missed detections.
+        for seg, name in self.segment_scenarios.items():
+            if name in ("ddos", "scan"):
+                self._launch_attacker(name, seg)
+        logger.info("SimEngine resumed")
 
     def snapshot(self) -> dict:
         return self.sc.snapshot(self.gen, self.segment_scenarios, self.running)
@@ -1074,6 +1190,14 @@ async def websocket_endpoint(ws: WebSocket):
                 msg = json.loads(data)
                 if msg.get("type") == "scenario":
                     await engine.set_scenario(msg["name"], msg.get("segment"))
+                elif msg.get("type") == "control":
+                    action = msg.get("action")
+                    if action == "reset_metrics":
+                        engine.sc.reset_metrics()
+                    elif action == "pause":
+                        await engine.pause()
+                    elif action == "resume":
+                        await engine.resume()
             except Exception:
                 pass
     except WebSocketDisconnect:

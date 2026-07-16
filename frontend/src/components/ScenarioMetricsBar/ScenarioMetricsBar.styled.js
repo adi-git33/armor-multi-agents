@@ -49,12 +49,31 @@ export const ScenarioButton = styled(Button, {
   },
 }));
 
-export const Clock = styled(Typography)(({ theme }) => ({
+export const Clock = styled(Typography, {
+  shouldForwardProp: (prop) => prop !== "paused",
+})(({ theme, paused }) => ({
   marginLeft: "12px",
   fontSize: 14,
   fontWeight: 500,
-  color: theme.customDashboard.textMuted,
+  color: paused ? "#d9a23f" : theme.customDashboard.textMuted,
   minWidth: 56,
+}));
+
+export const ControlButton = styled(Button)(({ theme }) => ({
+  textTransform: "none",
+  minWidth: 34,
+  width: 34,
+  height: 28,
+  padding: 0,
+  fontSize: 13,
+  lineHeight: 1,
+  borderRadius: "6px",
+  backgroundColor: theme.customDashboard.panelMutedSurface,
+  color: theme.customDashboard.textSecondary,
+  border: `1px solid ${theme.customDashboard.panelBorder}`,
+  "&:hover": {
+    backgroundColor: theme.customDashboard.panelMutedSurfaceHover,
+  },
 }));
 
 export const MetricsPanel = styled(Paper)(({ theme }) => ({

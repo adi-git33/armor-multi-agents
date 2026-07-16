@@ -60,5 +60,12 @@ export function useDashboardSocket() {
     };
   }, []);
 
-  return { state, connected, wsReady, sendScenario };
+  const sendControl = useCallback((action) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "control", action }));
+    }
+  }, []);
+
+  return { state, connected, wsReady, sendScenario, sendControl };
 }
