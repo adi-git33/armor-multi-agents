@@ -7,7 +7,7 @@
 
 A Python prototype of a **Multi-Agent System (MAS)** that autonomously detects, classifies, and responds to network attacks. Five specialized agents run concurrently, communicate through a shared message bus, and coordinate responses through coalition voting and resource arbitration.
 
-No frontend. No real network packets. The agents and their decision logic are real; the network traffic they operate on is synthetic.
+No real network packets — the agents and their decision logic are real; the network traffic they operate on is synthetic. A FastAPI server (`server.py`) streams live state over WebSocket to the React dashboard in `frontend/`, and `validation/` checks the SRS/SDD requirements.
 
 ---
 
@@ -106,6 +106,8 @@ PortScanner (internal) --> TMA  -->  ACA  -->  TIA  (same IP on 2 segs = MULTI_S
 
 Traffic per segment is drawn from `N(mean, std²)` at 10 Hz. The `TrafficGenerator` maintains a 600-sample rolling window per segment and anti-poisoning baseline: it uses the **oldest 50% of the window** for mean/std so an ongoing attack cannot poison its own detection baseline.
 
+**Warmup guard:** until a segment's window holds `MIN_BASELINE_SAMPLES` (30 = 3 s), `get_stats()` reports the configured design baseline with deviation 0. With fewer samples the std collapses toward the 1-pps div-by-zero guard, and the first readings after startup would otherwise register as "+100σ attacks" — firing spurious alerts and poisoning ACA's 30 s max-deviation feature.
+
 **Test:** `test_part1.py`
 
 ---
@@ -176,6 +178,7 @@ Performatives used: `INFORM`, `ACCEPT`, `REJECT`, `CALL_FOR_PROPOSAL`, `FAILURE`
 - On each sample, computes deviation: `(current_pps - baseline_mean) / baseline_std`
 - If deviation > `ANOMALY_THRESHOLD` (2.0σ) → publish `VOLUME_SPIKE` alert to `alerts` topic
 - Cooldown: 5 s per segment before re-alerting
+- **Escalation re-alert:** one cooldown bypass per window when the deviation crosses `ESCALATION_THRESHOLD` (4.0σ) after the last alert went out below it — a ramping attack whose first alert was dismissed as probable noise is re-reported the moment it sharpens, instead of waiting out the full 5 s
 
 Alert fields: `segment`, `anomaly_type`, `deviation`, `severity`, `current_pps`, `baseline_mean`, `baseline_std`, `port_count=0`, `port_growth_rate=0.0`
 
@@ -221,7 +224,7 @@ Key design choices:
 ### Classification (`aca.py`)
 
 **Layer 1 — fast noise filter:**
-If `deviation < 4σ` AND `anomaly_type == VOLUME_SPIKE` AND `recent_alert_count ≤ 1` → classify as NOISE immediately. No model call needed.
+If `deviation < 3σ` AND `anomaly_type == VOLUME_SPIKE` AND `recent_alert_count ≤ 1` → classify as NOISE immediately. No model call needed. (The 3σ line matches the trainer's `DDOS_DEV_FLOOR`, so first alerts inside the trained 3–5σ overlap zone reach the model instead of being auto-dismissed.)
 
 **Layer 2 — trained model:**
 9-feature vector → `DecisionTreeClassifier.predict_proba()` → classification + confidence.
