@@ -66,7 +66,7 @@ _LAST_RUN_PATH = _HERE / "last_run.json"
 # compat (`--suite scenarios`) but isn't exposed as its own button — the
 # web "run all scenarios" action runs s1..s6 individually instead, which
 # streams live progress per-scenario instead of one 90s black box.
-AGENT_SUITE_KEYS = ["tma", "aca", "rca", "tia", "raa", "system"]
+AGENT_SUITE_KEYS = ["tma", "aca", "rca", "tia", "raa", "system", "stress"]
 SCENARIO_KEYS = ["s1", "s2", "s3", "s4", "s5", "s6"]
 
 # Rough expected durations (seconds) — purely informational, shown in the
@@ -79,6 +79,7 @@ SUITE_META = {
     "tia":       {"title": "Threat Intelligence Agent", "est_sec": 30},
     "raa":       {"title": "Resource Allocator Agent", "est_sec": 30},
     "system":    {"title": "System-Level (FR-29..FR-34 + SW)", "est_sec": 45},
+    "stress":    {"title": "High-Stress Load (Figure 6 source)", "est_sec": 30},
     "s1":        {"title": "Single-Segment DDoS Attack", "est_sec": 8},
     "s2":        {"title": "Multi-Segment Coordinated Attack", "est_sec": 16},
     "s3":        {"title": "Resource Contention Under Heavy Load", "est_sec": 8},
@@ -263,8 +264,9 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
     # Structured numbers instead of pre-rendered PNGs — the frontend renders
     # its own charts from this (see ValidationCharts/*), so it can add
     # tooltips, resize, and follow the app's own theme instead of shipping a
-    # static image. degradation_panel_data() is a fixed illustrative
-    # comparison, not derived from suites_run, so it's included every run.
+    # static image. degradation_panel_data()'s High-Stress column comes from
+    # the last measured validate_stress.py run (stress_results.json), so it's
+    # included every run regardless of which suites just executed.
     metrics = aggregate_metrics(suites_run)
     metrics["degradation"] = degradation_panel_data()
 

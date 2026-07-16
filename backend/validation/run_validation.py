@@ -10,7 +10,7 @@ Usage:
 
 Options:
     --quick          Skip slow stress-test suites (TIA, RAA, scenarios)
-    --suite SUITE    Run only one suite: tma | aca | rca | tia | raa | system | scenarios
+    --suite SUITE    Run only one suite: tma | aca | rca | tia | raa | system | stress | scenarios
     --no-charts      Skip matplotlib chart export
     --chart-dir DIR  Directory for PNG charts (default: validation/charts/)
 
@@ -54,6 +54,7 @@ SUITES = {
     "tia":       ("validate_tia",       "TIA  (Threat Intelligence Agent)", "run"),
     "raa":       ("validate_raa",       "RAA  (Resource Allocator Agent)", "run"),
     "system":    ("validate_system",    "System-Level  (FR-29..FR-34 + SW)", "run"),
+    "stress":    ("validate_stress",    "High-Stress Load  (Figure 6 degradation source)", "run"),
     "scenarios": ("validate_scenarios", "Scenarios  (SRS §8, all 6)", "run"),
     # Individually-runnable scenarios (same module, one entrypoint each) —
     # lets the web UI and `--suite sN` run a single SRS §8 scenario instead

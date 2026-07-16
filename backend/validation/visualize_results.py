@@ -13,6 +13,7 @@ parsing fallbacks):
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -374,11 +375,13 @@ def _fig5_resource_utilization(metrics: dict, out: Path) -> Path | None:
 # (title, std, stress, target, higher_better, y_max, fmt, tgt_annotation)
 # fmt: "pct" → %, "ms" → ms, "f3" → 3 d.p., "yn" → Correct / Violated
 #
-# Fixed illustrative comparison (no formal load sweep — §5.2): Baseline is the
-# standard S3 scenario result, High Stress is the system-level stress-test
-# condition. Not derived from whichever suites happen to run, so it's the same
-# every time — single source of truth for both the PNG figure (CLI/report
-# export) and the frontend's live chart (degradation_panel_data()).
+# Baseline is the standard S3 scenario result (fixed). The High-Stress column
+# is MEASURED: validate_stress.py runs the five-attack concurrent-load test
+# and writes stress_results.json; degradation_panels() below substitutes those
+# measured values in. The stress numbers here are only the pre-measurement
+# illustrative fallback, used when no stress run has ever been recorded.
+# Single source of truth for both the PNG figure (CLI/report export) and the
+# frontend's live chart (degradation_panel_data()).
 DEGRADATION_PANELS = [
     ("Detection Rate",
      1.000, 1.000, 0.90, True,  1.15, "pct", "threshold: 90%"),
@@ -394,9 +397,38 @@ DEGRADATION_PANELS = [
      1.000, 0.000, 1.00, True,  1.30, "yn",  "required: correct"),
 ]
 
+_STRESS_RESULTS_PATH = Path(__file__).resolve().parent / "stress_results.json"
+
+# DEGRADATION_PANELS title → stress_results.json key (validate_stress.py)
+_STRESS_KEY_BY_TITLE = {
+    "Detection Rate":            "dr",
+    "Alert False Positive Rate": "fpr",
+    "Response Time (MTTR)":      "mttr_ms",
+    "Social Welfare":            "sw",
+    "Resource Overhead":         "overhead",
+    "Auction Priority Ordering": "auction_ok",
+}
+
+
+def degradation_panels() -> list[tuple]:
+    """DEGRADATION_PANELS with the High-Stress column replaced by the last
+    measured validate_stress.py run, when one exists."""
+    try:
+        measured = json.loads(_STRESS_RESULTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return list(DEGRADATION_PANELS)
+
+    panels = []
+    for title, std_val, stress_val, target, hb, y_max, fmt, ann in DEGRADATION_PANELS:
+        key = _STRESS_KEY_BY_TITLE.get(title)
+        if key in measured and measured[key] is not None:
+            stress_val = float(measured[key])
+        panels.append((title, std_val, stress_val, target, hb, y_max, fmt, ann))
+    return panels
+
 
 def degradation_panel_data() -> list[dict]:
-    """JSON-friendly form of DEGRADATION_PANELS for the frontend's live chart."""
+    """JSON-friendly form of degradation_panels() for the frontend's live chart."""
     return [
         {
             "title": title, "std": std_val, "stress": stress_val, "target": target,
@@ -404,7 +436,7 @@ def degradation_panel_data() -> list[dict]:
             "tgt_annotation": tgt_annotation,
         }
         for title, std_val, stress_val, target, higher_better, y_max, fmt, tgt_annotation
-        in DEGRADATION_PANELS
+        in degradation_panels()
     ]
 
 
@@ -427,7 +459,7 @@ def _fig6_degradation_analysis(out: Path) -> Path:
     axes_flat = axes.flatten()
 
     for ax, (title, std_val, stress_val, target,
-             higher_better, y_max, fmt, tgt_annotation) in zip(axes_flat, DEGRADATION_PANELS):
+             higher_better, y_max, fmt, tgt_annotation) in zip(axes_flat, degradation_panels()):
 
         values = [std_val, stress_val]
         ok = [v >= target if higher_better else v <= target for v in values]
