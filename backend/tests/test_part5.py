@@ -65,8 +65,8 @@ async def main() -> None:
     print("  Part 5 Test  |  Anomaly Classifier Agent (ACA)")
     print("=" * 65)
 
-    # Pre-flight: model must exist
-    model_path = Path("agents/aca_model.pkl")
+    # Pre-flight: model must exist (same location aca.py loads from)
+    model_path = Path(__file__).resolve().parent.parent / "models" / "aca_model.pkl"
     if not model_path.exists():
         print("\n  [FAIL] aca_model.pkl not found — run: python -m agents.aca_trainer")
         return

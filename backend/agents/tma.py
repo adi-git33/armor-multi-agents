@@ -37,6 +37,13 @@ logger = logging.getLogger(__name__)
 ANOMALY_THRESHOLD = 2.0
 ALERT_COOLDOWN    = 5.0   # seconds before re-alerting same segment
 
+# A ramp-phase alert often fires in the 2-3s band, which ACA's layer-1
+# filter (correctly) treats as probable noise. If the deviation then blows
+# past this threshold, waiting out the full cooldown would add ~5 s of
+# detection latency per attack — so one escalation re-alert is allowed
+# through the cooldown per window when the segment crosses this line.
+ESCALATION_THRESHOLD = 4.0
+
 # ── port-scan detection ───────────────────────────────────────────────
 PORT_SCAN_WINDOW    = 10.0  # sliding window per src IP
 PORT_SCAN_THRESHOLD = 3     # unique dst ports from one IP → alert
@@ -77,6 +84,8 @@ class TrafficMonitorAgent(BaseAgent):
                 "state":           SegmentState.NORMAL,
                 "last_alert_time": 0.0,
                 "alert_count":     0,
+                "last_alert_dev":  0.0,   # |deviation| at the last alert
+                "escalated":       False, # cooldown bypass already used
             }
             for sid in seg_ids
         }
@@ -127,10 +136,23 @@ class TrafficMonitorAgent(BaseAgent):
         is_anomaly  = abs(stats.deviation) >= ANOMALY_THRESHOLD
         cooldown_ok = (now - belief["last_alert_time"]) >= ALERT_COOLDOWN
 
-        if is_anomaly and cooldown_ok:
+        # Escalation re-alert: the last alert went out below the escalation
+        # line and the deviation has since crossed it — the anomaly sharpened
+        # mid-cooldown. One bypass per cooldown window.
+        escalation = (
+            is_anomaly
+            and not cooldown_ok
+            and not belief["escalated"]
+            and abs(stats.deviation) >= ESCALATION_THRESHOLD
+            and belief["last_alert_dev"] < ESCALATION_THRESHOLD
+        )
+
+        if is_anomaly and (cooldown_ok or escalation):
             belief["state"]           = SegmentState.ANOMALY
             belief["last_alert_time"] = now
             belief["alert_count"]    += 1
+            belief["last_alert_dev"]  = abs(stats.deviation)
+            belief["escalated"]       = escalation
 
             severity = min(1.0, (abs(stats.deviation) - ANOMALY_THRESHOLD)
                            / (10.0 - ANOMALY_THRESHOLD))
@@ -159,7 +181,9 @@ class TrafficMonitorAgent(BaseAgent):
             if belief["state"] == SegmentState.ANOMALY:
                 logger.info("[%s] CLEAR  segment=%s",
                             self.agent_id, sample.segment)
-            belief["state"] = SegmentState.NORMAL
+            belief["state"]          = SegmentState.NORMAL
+            belief["last_alert_dev"] = 0.0
+            belief["escalated"]      = False
 
     # ------------------------------------------------------------------
     # Detection mode 2: port scan

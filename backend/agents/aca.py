@@ -37,7 +37,10 @@ logger = logging.getLogger(__name__)
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "aca_model.pkl"
 
 # Layer-1 filter thresholds
-NOISE_MAX_DEVIATION  = 4.0   # sigma — below this AND no history → noise
+NOISE_MAX_DEVIATION  = 3.0   # sigma — below this AND no history → noise
+                             # (3.0 matches the trainer's DDOS_DEV_FLOOR, so
+                             # first alerts in the 3-4σ band reach the model,
+                             # which was trained on exactly that overlap zone)
 NOISE_MAX_HISTORY    = 1     # alert count in 30s — at most this → noise
 
 # Evidence window
