@@ -91,6 +91,13 @@ async def main() -> None:
     bus.subscribe(Topic.RESOLUTION, on_resolution)
     bus.subscribe(Topic.COALITION,  on_coalition)
 
+    # Escalation ladder (FR-13): the FIRST confirmed DDoS answers with the
+    # least-disruptive rung (THROTTLE_SEGMENT, unvoted); a second confirmed
+    # report inside ESCALATION_WINDOW climbs to QUARANTINE_SEGMENT.
+    from agents.rca import MIN_ESCALATION_GAP
+
+    await bus.publish(_threat(confidence=0.92))
+    await asyncio.sleep(MIN_ESCALATION_GAP + 0.5)
     await bus.publish(_threat(confidence=0.92))
     await asyncio.sleep(VOTE_WINDOW + 0.5)
 
@@ -106,9 +113,10 @@ async def main() -> None:
         f"missing: {REQUIRED_RESOLUTION_FIELDS - r.keys()}",
     )
     check(
-        "Resolution action is QUARANTINE_SEGMENT for DDoS",
-        r.get("action") == "QUARANTINE_SEGMENT",
-        f"action: '{r.get('action')}'",
+        "First resolution is rung 0 (THROTTLE_SEGMENT), then escalates to QUARANTINE_SEGMENT",
+        r.get("action") == "THROTTLE_SEGMENT"
+        and any(x.get("action") == "QUARANTINE_SEGMENT" for x in resolutions),
+        f"actions: {[x.get('action') for x in resolutions]}",
     )
 
     await rca.stop()
@@ -147,6 +155,9 @@ async def main() -> None:
     bus.subscribe(Topic.RESOLUTION, on_resolution2)
     bus.subscribe(Topic.COALITION,  on_cfp2)
 
+    # Two reports to climb the ladder — only the QUARANTINE rung is voted.
+    await bus.publish(_threat(segment="server", confidence=0.93))
+    await asyncio.sleep(MIN_ESCALATION_GAP + 0.5)
     await bus.publish(_threat(segment="server", confidence=0.93))
     await asyncio.sleep(VOTE_WINDOW + 0.5)
 
@@ -156,7 +167,10 @@ async def main() -> None:
         f"CFPs received: {len(cfps2)}  "
         f"proposed_action: '{cfps2[0].get('proposed_action') if cfps2 else 'none'}'",
     )
-    r2 = resolutions2[0] if resolutions2 else {}
+    # The unvoted THROTTLE resolution lands first — judge the voted one.
+    r2 = next(
+        (x for x in resolutions2 if x.get("action") == "QUARANTINE_SEGMENT"), {}
+    )
     check(
         "RCA counts external ACCEPT votes (RCA self + TIA = 2 accepts)",
         r2.get("votes_accept", 0) >= 2,
@@ -314,13 +328,24 @@ async def main() -> None:
         },
     ))
 
-    # Also send a DDoS report so we can test quarantine enforcement too
+    # Also test quarantine enforcement. RCA's escalation ladder answers the
+    # FIRST DDoS report with rung 0 (THROTTLE_SEGMENT); QUARANTINE_SEGMENT
+    # needs a second confirmed report on the same segment inside
+    # ESCALATION_WINDOW (and past the MIN_ESCALATION_GAP debounce).
     await bus.publish(_threat(
         segment        = "public-facing",
         classification = "DDOS",
         confidence     = 0.93,
         action         = "QUARANTINE_SEGMENT",
         evidence       = {"alert_count_30s": 2},
+    ))
+    await asyncio.sleep(MIN_ESCALATION_GAP + 0.5)
+    await bus.publish(_threat(
+        segment        = "public-facing",
+        classification = "DDOS",
+        confidence     = 0.93,
+        action         = "QUARANTINE_SEGMENT",
+        evidence       = {"alert_count_30s": 3},
     ))
 
     await asyncio.sleep(VOTE_WINDOW + 0.5)
