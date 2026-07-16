@@ -15,6 +15,10 @@ SAMPLE_INTERVAL = 1.0 / SAMPLE_RATE   # seconds between samples
 # FR-04: baseline window = 60 seconds of samples
 BASELINE_WINDOW = SAMPLE_RATE * 60    # 600 samples
 
+# Minimum samples before get_stats() reports a real deviation — see the
+# warmup guard in get_stats(). 30 samples = 3 s at the 10 Hz sample rate.
+MIN_BASELINE_SAMPLES = 30
+
 
 SampleCallback = Callable[[TrafficSample], Awaitable[None]]
 
@@ -151,7 +155,15 @@ class TrafficGenerator:
         seg = self._topology.get(segment_id)
         window = self._windows[segment_id]
 
-        if len(window) < 2:
+        # A tiny window can't support a real baseline: with a handful of
+        # samples std collapses toward the 1.0-pps div-by-zero guard below
+        # (real segment stds are 8-75 pps), so the very first readings
+        # produce absurd "+100σ" deviations that every downstream consumer
+        # (TMA alerts, ACA's 30 s max-deviation feature, the dashboard
+        # health badge) treats as a monster attack. Until the window holds
+        # MIN_BASELINE_SAMPLES, report the configured design baseline with
+        # deviation 0 — "no reading yet", same contract as an empty window.
+        if len(window) < MIN_BASELINE_SAMPLES:
             return SegmentStats(
                 segment=segment_id,
                 current_pps=seg.baseline_mean,
