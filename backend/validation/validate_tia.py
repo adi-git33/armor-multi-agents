@@ -68,14 +68,22 @@ async def run() -> ValidationSuite:
     bus.subscribe(Topic.THREAT_INTEL, on_intel)
 
     gen_task = asyncio.create_task(gen.run())
-    await asyncio.sleep(2)
+    await asyncio.sleep(3.5)   # ≥ MIN_BASELINE_SAMPLES so deviations are real
 
     section("FR-15  Global threat model updated each time a pattern fires")
+    # Both TIA patterns (COORDINATED_DDOS, MULTI_SEGMENT_SCAN) are
+    # cross-segment by design, so the pattern harness must attack TWO
+    # segments. (This check used to run a single-segment DDoS and passed
+    # only because startup baseline artifacts faked DDOS verdicts on other
+    # segments — fixed by the TrafficGenerator warmup guard.)
     atk1      = DDoSAttacker("ATK:pub", "public-facing", gen,
                              intensity_multiplier=10.0, rng_seed=9)
-    atk1_task = asyncio.create_task(atk1.launch(6))
+    atk1b     = DDoSAttacker("ATK:int", "internal", gen,
+                             intensity_multiplier=10.0, rng_seed=10)
+    atk1_task  = asyncio.create_task(atk1.launch(6))
+    atk1b_task = asyncio.create_task(atk1b.launch(6))
     await asyncio.sleep(6 + 1.0)
-    await asyncio.gather(atk1_task, return_exceptions=True)
+    await asyncio.gather(atk1_task, atk1b_task, return_exceptions=True)
     gen.stop(); gen_task.cancel()
     await asyncio.gather(gen_task, return_exceptions=True)
 
@@ -84,11 +92,11 @@ async def run() -> ValidationSuite:
                 hasattr(tia, "intel_published"),
                 observed="attribute present" if hasattr(tia, "intel_published") else "missing",
                 expected="intel_published attribute")
-    suite.check("FR-15", "TIA published >= 1 threat-intel update during single-segment attack",
+    suite.check("FR-15", "TIA published >= 1 threat-intel update during coordinated 2-segment attack",
                 len(intel_msgs) >= 1 or len(tia.intel_published) >= 1,
                 observed=f"{len(intel_msgs)} THREAT_INTEL msgs, {len(tia.intel_published)} internal",
                 expected=">= 1 intel update",
-                note="TIA fires on pattern detection; single-seg DDoS may not trigger cross-seg pattern")
+                note="COORDINATED_DDOS fires on DDOS classifications on ≥ 2 segments within 30 s")
 
     # FR-18: TIA updates the model; test via internal counter as proxy
     section("FR-18  Publish updated priority threat list every 1 second")

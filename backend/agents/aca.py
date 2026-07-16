@@ -67,6 +67,12 @@ class AnomalyClassifierAgent(BaseAgent):
         # Per-segment alert history for context features
         self._history: dict[str, list[dict]] = {}
 
+        # Online-learning feedback buffer (FR-08): resolved incidents are
+        # ground truth for the classifications that triggered them. A
+        # RandomForest cannot update incrementally, so feedback accumulates
+        # here for aca_trainer to fold into the next scheduled retraining.
+        self.feedback_buffer: list[dict] = []
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -74,7 +80,36 @@ class AnomalyClassifierAgent(BaseAgent):
     async def start(self) -> None:
         await super().start()
         self.bus.subscribe(Topic.ALERTS, self._on_alert)
+        self.bus.subscribe(Topic.RESOLUTION, self._on_resolution)
         logger.info("[%s] ready — model loaded from %s", self.agent_id, MODEL_PATH)
+
+    # ------------------------------------------------------------------
+    # Online-learning hook  (FR-08)
+    # ------------------------------------------------------------------
+
+    async def _on_resolution(self, msg: Message) -> None:
+        if not self._running:
+            return
+        self.on_incident_resolved(msg.content)
+
+    def on_incident_resolved(self, resolution: dict) -> None:
+        """Record a resolved incident as labelled feedback. EXECUTED
+        confirms the classification that opened the incident; REJECTED
+        marks it as a probable false positive. Consumed by aca_trainer
+        at retraining time — see feedback_buffer above."""
+        outcome = resolution.get("outcome", "")
+        if outcome not in ("EXECUTED", "REJECTED"):
+            return   # RELEASED etc. carry no classification verdict
+        self.feedback_buffer.append({
+            "segment":        resolution.get("segment", ""),
+            "classification": resolution.get("classification", ""),
+            "action":         resolution.get("action", ""),
+            "outcome":        outcome,
+            "confidence":     resolution.get("confidence", 0.0),
+            "time":           time.monotonic(),
+        })
+        if len(self.feedback_buffer) > 500:
+            del self.feedback_buffer[: len(self.feedback_buffer) - 500]
 
     # ------------------------------------------------------------------
     # Alert handler

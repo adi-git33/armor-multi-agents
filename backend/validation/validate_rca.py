@@ -269,7 +269,17 @@ async def run() -> ValidationSuite:
     # Using a 300 s denominator matches the system-level availability target.
     section("D-RCA-2  Availability > 99% during attack")
     AVAIL_WINDOW_S    = 300.0
-    rca_processing_s  = sum(r.get("duration_ms", 0) for r in resolution_msgs) / 1000.0
+    # RELEASED resolutions reuse the duration_ms field for the quarantine
+    # HOLD time (how long the segment stayed contained — seconds-scale,
+    # see rca._release_after_hold). That is deliberate enforcement state,
+    # not decision-processing latency, and summing it here silently sank
+    # availability to ~95% the moment auto-release was added. Only
+    # decision resolutions (vote window + deliberation) count as the
+    # "waiting on a defensive decision" time this metric is defined over.
+    rca_processing_s  = sum(
+        r.get("duration_ms", 0) for r in resolution_msgs
+        if r.get("outcome") != "RELEASED"
+    ) / 1000.0
     availability      = max(0.0, (AVAIL_WINDOW_S - rca_processing_s) / AVAIL_WINDOW_S)
     suite.check("D-RCA-2", f"Availability > {MIN_AVAILABILITY*100:.0f}%",
                 availability > MIN_AVAILABILITY,

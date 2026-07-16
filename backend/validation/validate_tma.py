@@ -151,7 +151,11 @@ async def run() -> ValidationSuite:
     bus3.subscribe(Topic.ALERTS, on_timed_alert)
 
     gen3_task = asyncio.create_task(gen3.run())
-    await asyncio.sleep(2)   # let baseline settle
+    # Baseline must be established BEFORE the latency clock starts —
+    # get_stats() reports no deviation until MIN_BASELINE_SAMPLES (30 = 3 s)
+    # accumulate, and warmup is a precondition of this check, not part of
+    # the alert latency it measures.
+    await asyncio.sleep(3.5)
 
     attack_start = time.monotonic()
     atk3 = DDoSAttacker("ATK:3", ATTACK_SEGMENT, gen3, intensity_multiplier=10.0, rng_seed=1)
@@ -162,8 +166,11 @@ async def run() -> ValidationSuite:
     atk3._running = False
     await asyncio.gather(gen3_task, atk3_task, return_exceptions=True)
 
-    if alert_wall_times:
-        first_alert_ms = (alert_wall_times[0] - attack_start) * 1000
+    # Only alerts fired AFTER the attack began count — a stray pre-attack
+    # noise alert must not satisfy (or distort) the latency measurement.
+    post_attack = [t for t in alert_wall_times if t >= attack_start]
+    if post_attack:
+        first_alert_ms = (post_attack[0] - attack_start) * 1000
         # TMA has 100ms sample interval + processing; 300ms total budget for test harness
         passed = first_alert_ms < (ALERT_LATENCY_MS + 300)
         suite.check(
