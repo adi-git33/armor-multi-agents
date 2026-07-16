@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -43,10 +44,19 @@ COOLDOWN_SEC = 5
 DDOS_SEG     = "public-facing"
 SCAN_SEG     = "server"
 
+# Keep in sync with server.py's live accounting (ATTACK_GRACE_SECS /
+# CALM_LINGER_SECS / ATTACK_MODALITY) — this script's whole purpose is to
+# produce the exact tally the live StateCollector would.
+ATTACK_GRACE_SECS = 5.0
+CALM_LINGER_SECS  = 10.0
+ATTACK_MODALITY   = {"DDOS": "VOLUME_SPIKE", "PORT_SCAN": "PORT_SCAN"}
+
 
 async def main() -> None:
     tally = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
     active_attacks: dict[str, str] = {}   # mirrors StateCollector.active_attacks
+    attack_started: dict[str, float] = {}
+    attack_ended:   dict[str, float] = {}
 
     clock    = SimClock(speed=1.0)
     topology = NetworkTopology()
@@ -62,12 +72,25 @@ async def main() -> None:
         c     = msg.content
         seg   = c.get("segment", "")
         clf   = c.get("classification", "")   # "NOISE" | "DDOS" | "PORT_SCAN"
+        src   = c.get("source_alert", "")
+        now   = time.monotonic()
         truth = active_attacks.get(seg)
+        in_grace  = (truth is not None and
+                     now - attack_started.get(seg, now) < ATTACK_GRACE_SECS)
+        in_linger = (truth is None and
+                     now - attack_ended.get(seg, float("-inf")) < CALM_LINGER_SECS)
 
         if clf == "NOISE":
-            tally["fn" if truth is not None else "tn"] += 1
-        else:
-            tally["tp" if truth is not None else "fp"] += 1
+            if truth is not None and src == ATTACK_MODALITY.get(truth):
+                if not in_grace:
+                    tally["fn"] += 1
+            else:
+                tally["tn"] += 1
+        elif truth is not None:
+            if clf == truth:
+                tally["tp"] += 1
+        elif not in_linger:
+            tally["fp"] += 1
 
     bus.subscribe(Topic.THREAT_REPORTS, on_report)
 
@@ -78,22 +101,26 @@ async def main() -> None:
 
     print(f"[seed] DDoS window on {DDOS_SEG}: {DDOS_SEC}s")
     active_attacks[DDOS_SEG] = "DDOS"
+    attack_started[DDOS_SEG] = time.monotonic()
     atk = DDoSAttacker("Seed-DDoS", DDOS_SEG, gen, intensity_multiplier=6.0, ramp_seconds=3.0)
     atk_task = asyncio.create_task(atk.launch(DDOS_SEC))
     await asyncio.sleep(DDOS_SEC + 0.5)
     await asyncio.gather(atk_task, return_exceptions=True)
     del active_attacks[DDOS_SEG]
+    attack_ended[DDOS_SEG] = time.monotonic()
 
     print(f"[seed] cooldown: {COOLDOWN_SEC}s")
     await asyncio.sleep(COOLDOWN_SEC)
 
     print(f"[seed] port-scan window on {SCAN_SEG}: {SCAN_SEC}s")
     active_attacks[SCAN_SEG] = "PORT_SCAN"
+    attack_started[SCAN_SEG] = time.monotonic()
     scanner = PortScanner("Seed-Scan", SCAN_SEG, gen, src_ip="45.33.32.156", probe_interval=0.3)
     scan_task = asyncio.create_task(scanner.launch(SCAN_SEC))
     await asyncio.sleep(SCAN_SEC + 0.5)
     await asyncio.gather(scan_task, return_exceptions=True)
     del active_attacks[SCAN_SEG]
+    attack_ended[SCAN_SEG] = time.monotonic()
 
     gen.stop()
     gen_task.cancel()
