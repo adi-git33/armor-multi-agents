@@ -66,6 +66,19 @@ export const SuiteButton = styled("button", {
     : undefined,
 }));
 
+// Wraps the Cancel/Run-All button pair (or Run All alone) so the group as a
+// whole is pushed to the right edge of the ControlBar via a single auto
+// margin. Putting marginLeft: "auto" on the buttons themselves instead
+// would give each button its own auto margin, and a flex row splits the
+// leftover space *between* however many auto margins exist in the line —
+// that pushed Cancel and Run All apart instead of keeping them adjacent.
+export const ControlBarActions = styled(Box)({
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  marginLeft: "auto",
+});
+
 export const RunAllButton = styled("button")(({ theme, disabled }) => ({
   fontFamily: "inherit",
   fontSize: 16,
@@ -78,9 +91,25 @@ export const RunAllButton = styled("button")(({ theme, disabled }) => ({
   backgroundColor: theme.palette.primary.main,
   color: theme.palette.primary.contrastText,
   opacity: disabled ? 0.5 : 1,
-  marginLeft: "auto",
   "&:hover:not(:disabled)": {
     backgroundColor: theme.customDashboard.communicationHover,
+  },
+}));
+
+export const CancelButton = styled("button")(({ theme }) => ({
+  fontFamily: "inherit",
+  fontSize: 16,
+  fontWeight: 700,
+  letterSpacing: ".06em",
+  padding: "7px 18px",
+  borderRadius: "7px",
+  border: `1px solid ${theme.palette.error.main}`,
+  cursor: "pointer",
+  backgroundColor: "transparent",
+  color: theme.palette.error.main,
+  "&:hover": {
+    backgroundColor: theme.palette.error.main,
+    color: theme.palette.error.contrastText,
   },
 }));
 

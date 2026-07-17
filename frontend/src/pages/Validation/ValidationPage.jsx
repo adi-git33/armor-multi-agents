@@ -5,12 +5,14 @@ import { C } from "../../dashboard/constants";
 import { useValidationSocket } from "../../hooks/useValidationSocket";
 import {
   Badge,
+  CancelButton,
   ChartsHeaderRow,
   ChartsPanel,
   Chevron,
   ConnDot,
   ConnRow,
   ControlBar,
+  ControlBarActions,
   ControlLabel,
   DetailHeader,
   DetailMeta,
@@ -60,22 +62,23 @@ function badgeTone(verdict) {
 }
 
 function useElapsed(running) {
-  const [, force] = useState(0);
-  const [startedAt, setStartedAt] = useState(null);
-
-  useEffect(() => {
-    if (running && startedAt === null) setStartedAt(Date.now());
-    if (!running) setStartedAt(null);
-  }, [running, startedAt]);
+  const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
     if (!running) return undefined;
-    const id = setInterval(() => force((n) => n + 1), 500);
+    // `start` is a plain closure variable, not state or a ref — it only
+    // needs to live for the duration of this effect (one run), and
+    // Date.now()/setState both happen inside the interval callback, never
+    // in the render body or synchronously in the effect body itself.
+    let start = null;
+    const id = setInterval(() => {
+      if (start === null) start = Date.now();
+      setElapsedMs(Date.now() - start);
+    }, 500);
     return () => clearInterval(id);
   }, [running]);
 
-  if (!running || startedAt === null) return 0;
-  return (Date.now() - startedAt) / 1000;
+  return running ? elapsedMs / 1000 : 0;
 }
 
 function ValidationPage() {
@@ -94,6 +97,7 @@ function ValidationPage() {
     runSuite,
     runAll,
     runAllScenarios,
+    cancelRun,
   } = useValidationSocket();
 
   const [expanded, setExpanded] = useState({});
@@ -126,6 +130,7 @@ function ValidationPage() {
     let toneColor = C.idle;
     if (suiteState?.status === "done") toneColor = suiteState.allPassed ? C.green : C.red;
     else if (suiteState?.status === "error") toneColor = C.red;
+    else if (suiteState?.status === "cancelled") toneColor = C.amber;
     else if (isRunningThis) toneColor = C.amber;
     return (
       <Tooltip key={s.id} title={s.title} arrow placement="top">
@@ -150,17 +155,26 @@ function ValidationPage() {
           <ConnDot dotcolor={connected ? C.green : C.red} />
           {connected ? "connected" : "reconnecting…"}
         </ConnRow>
-        <RunAllButton disabled={running || !connected} onClick={() => runAll(allKeys)}>
-          RUN ALL
-        </RunAllButton>
+        <ControlBarActions>
+          {running && (
+            <CancelButton onClick={cancelRun}>
+              CANCEL
+            </CancelButton>
+          )}
+          <RunAllButton disabled={running || !connected} onClick={() => runAll(allKeys)}>
+            RUN ALL
+          </RunAllButton>
+        </ControlBarActions>
       </ControlBar>
 
       <ControlBar>
         <ControlLabel>SCENARIOS · SRS §8</ControlLabel>
         {scenarioSuites.map(renderSuiteButton)}
-        <RunAllButton disabled={running || !connected} onClick={() => runAllScenarios(scenarioKeys)}>
-          RUN ALL SCENARIOS
-        </RunAllButton>
+        <ControlBarActions>
+          <RunAllButton disabled={running || !connected} onClick={() => runAllScenarios(scenarioKeys)}>
+            RUN ALL SCENARIOS
+          </RunAllButton>
+        </ControlBarActions>
       </ControlBar>
 
       <ProgressPanel>
@@ -246,6 +260,8 @@ function ValidationPage() {
                     </SummaryFraction>
                   ) : suiteState.status === "error" ? (
                     <SummaryStatusTag valuecolor={C.red}>ERROR</SummaryStatusTag>
+                  ) : suiteState.status === "cancelled" ? (
+                    <SummaryStatusTag valuecolor={C.amber}>CANCELLED</SummaryStatusTag>
                   ) : (
                     <SummaryStatusTag valuecolor={C.amber}>
                       {suiteState.status === "running" ? "RUNNING…" : "QUEUED"}

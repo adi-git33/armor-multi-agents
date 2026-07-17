@@ -17,7 +17,7 @@ SRS targets: FPR < 8% / DR > 90%
 Run:  cd backend && python validation/validate_aca.py
 """
 from __future__ import annotations
-import asyncio, sys, time
+import asyncio, pickle, sys, time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -29,7 +29,7 @@ from simulation.network  import NetworkTopology
 from simulation.traffic  import TrafficGenerator, SAMPLE_RATE
 from simulation.attackers import DDoSAttacker, PortScanner
 from agents.tma  import TrafficMonitorAgent
-from agents.aca  import AnomalyClassifierAgent
+from agents.aca  import AnomalyClassifierAgent, MODEL_PATH
 from bus.message_bus import MessageBus
 from core.messages   import Topic
 from helpers import ValidationSuite, section
@@ -150,16 +150,33 @@ async def run() -> ValidationSuite:
                 observed=f"{len(well_structured)}/{len(all_reports)} well-structured",
                 expected="100% well-structured")
 
-    # ── FR-08: Online learning hook ───────────────────────────────────
+    # ── FR-08: Online learning ─────────────────────────────────────────
+    # A real check, not just "does the hook exist": feed resolved-incident
+    # feedback in and see whether the classifier is ever actually retrained
+    # from it. feedback_buffer fills correctly, but nothing (aca_trainer.py,
+    # a scheduled job, anything) ever reads it back into the model — so this
+    # is expected to fail honestly until that loop is actually built.
     section("FR-08  Model updated after resolved incident (online learning)")
     aca3 = AnomalyClassifierAgent("ACA:3", MessageBus())
-    has_update = (getattr(aca3, "update_model", None) or
-                  getattr(aca3, "on_incident_resolved", None)) is not None
-    suite.check("FR-08", "ACA exposes an online-learning update hook",
-                has_update,
-                observed="method found" if has_update else "no update method",
-                expected="update_model or on_incident_resolved method exists",
-                note="Implemented in aca_trainer.py; invoked after each resolved incident")
+    model_before = aca3._clf
+    for i in range(50):
+        aca3.on_incident_resolved({
+            "segment":        ATTACK_SEG,
+            "classification": "DDOS",
+            "action":         "QUARANTINE_SEGMENT",
+            "outcome":        "REJECTED" if i % 3 == 0 else "EXECUTED",
+            "confidence":     0.9,
+        })
+    feedback_collected = len(aca3.feedback_buffer) == 50
+    model_retrained     = aca3._clf is not model_before
+    suite.check("FR-08", "Resolved-incident feedback actually retrains the model",
+                feedback_collected and model_retrained,
+                observed=(f"feedback_buffer={len(aca3.feedback_buffer)} samples collected, "
+                          f"model_retrained={model_retrained}"),
+                expected="feedback consumed and classifier updated after resolved incidents",
+                note="feedback_buffer accumulates but is never read back into the model "
+                     "(no consumer in aca_trainer.py, no scheduled retrain job) — "
+                     "online learning is not actually wired up yet")
 
     # ── FR-09: FPR < 10% on normal traffic ────────────────────────────
     section("FR-09  FPR < 10% on normal-traffic window")
@@ -192,37 +209,54 @@ async def run() -> ValidationSuite:
 
     # ── D-ACA-1: Accuracy > 90% ───────────────────────────────────────
     section("D-ACA-1  Classification accuracy > 90%")
-    # Proxy: during a mixed DDoS+PortScan attack, ACA must detect at least
-    # one of each class. True accuracy requires labelled ground-truth dataset
-    # (covered by the trained model in validate_system.py FR-29).
+    # Coverage check: during a mixed DDoS+PortScan attack, ACA must detect
+    # at least one of each class. The actual accuracy number (held-out
+    # test-set accuracy against labelled ground truth) comes from
+    # aca_trainer.py, which stores it alongside the model at MODEL_PATH.
     ddos_detected = any(r.get("classification") == "DDOS"      for r in all_reports)
     scan_detected = any(r.get("classification") == "PORT_SCAN" for r in all_reports)
     both_detected = ddos_detected and scan_detected
     tp  = len([r for r in all_reports
                if r.get("classification") in ("DDOS", "PORT_SCAN")])
-    acc = tp / max(len(all_reports), 1)
+
+    with open(MODEL_PATH, "rb") as f:
+        model_payload = pickle.load(f)
+    acc = model_payload.get("accuracy")
+    if acc is None:
+        # Older model file trained before accuracy was persisted — fall back
+        # to the coverage ratio so the suite still runs.
+        acc = tp / max(len(all_reports), 1)
+
     suite.check("D-ACA-1", "ACA detects both DDOS and PORT_SCAN in mixed attack",
                 both_detected,
                 observed=(f"DDOS={ddos_detected} PORT_SCAN={scan_detected} "
                           f"({tp}/{len(all_reports)} non-NOISE reports)"),
-                expected="at least 1 DDOS + 1 PORT_SCAN report",
-                note="Full accuracy = (TP+TN)/total in validate_system.py")
+                expected="at least 1 DDOS + 1 PORT_SCAN report")
+    suite.check("D-ACA-1", f"Held-out model accuracy ≥ {MIN_ACCURACY*100:.0f}%",
+                acc >= MIN_ACCURACY,
+                observed=f"{acc*100:.1f}% (test_support={model_payload.get('test_support', '?')})",
+                expected=f"≥ {MIN_ACCURACY*100:.0f}%",
+                note=f"from {MODEL_PATH.name}, computed by aca_trainer.py on a held-out 20% split")
 
     # ── D-ACA-2: U_ACA formula ───────────────────────────────────────
     section("D-ACA-2  U_ACA = accuracy × (1−FPR) × model_improvement_rate")
-    model_imp = 0.05   # nominal; real value from trainer logs
+    # model_improvement_rate has no real measurement (online learning isn't
+    # wired up — see FR-08), so it's fixed at 1 to act as a neutral
+    # multiplier rather than a fabricated nominal value.
+    model_imp = 1.0
     u_aca     = acc * (1 - fpr) * model_imp
     suite.check("D-ACA-2", "U_ACA = accuracy × (1−FPR) × model_improvement_rate > 0",
                 u_aca > 0,
                 observed=f"U_ACA ≈ {u_aca:.6f}",
                 expected="> 0",
-                note=f"accuracy≈{acc:.2f}, FPR≈{fpr:.4f}, model_improvement_rate (nominal)={model_imp}")
+                note=f"accuracy≈{acc:.2f}, FPR≈{fpr:.4f}, model_improvement_rate={model_imp} "
+                     "(no real measurement exists — see FR-08)")
 
     suite.set_metrics({
         "defense": {
             "FPR_ACA": {"value": fpr, "target": MAX_FPR, "passed": fpr < MAX_FPR,
                         "label": "ACA FPR", "lower_is_better": True},
-            "accuracy": {"value": acc, "target": 0.90, "passed": acc >= 0.90 or both_detected,
+            "accuracy": {"value": acc, "target": 0.90, "passed": acc >= 0.90,
                          "label": "ACA Classification Accuracy"},
         },
     })

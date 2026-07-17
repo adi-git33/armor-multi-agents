@@ -157,6 +157,11 @@ def _jsonable(value: Any) -> Any:
 @router.websocket("/ws")
 async def validation_ws(ws: WebSocket) -> None:
     await ws.accept()
+    # Runs as a background task (rather than awaited inline) so this loop
+    # keeps reading incoming messages while a suite is in progress — that's
+    # what lets a "cancel" message sent mid-run actually reach us instead of
+    # queuing up behind the run.
+    run_task: asyncio.Task | None = None
     try:
         while True:
             raw = await ws.receive_text()
@@ -164,10 +169,17 @@ async def validation_ws(ws: WebSocket) -> None:
                 msg = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 continue
-            if msg.get("type") == "run":
-                await _run_and_stream(ws, msg.get("suite", "all"))
+            mtype = msg.get("type")
+            if mtype == "run":
+                if run_task is not None and not run_task.done():
+                    continue  # a run is already in flight — ignore
+                run_task = asyncio.create_task(_run_and_stream(ws, msg.get("suite", "all")))
+            elif mtype == "cancel":
+                if run_task is not None and not run_task.done():
+                    run_task.cancel()
     except WebSocketDisconnect:
-        pass
+        if run_task is not None and not run_task.done():
+            run_task.cancel()
 
 
 async def _run_and_stream(ws: WebSocket, target: str) -> None:
@@ -181,7 +193,7 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
     # events are queued from inside a synchronous callback fired mid-suite.
     queue: asyncio.Queue = asyncio.Queue()
 
-    def emit(evt: dict) -> None:
+    def emit(evt: dict | None) -> None:
         queue.put_nowait(evt)
 
     async def sender() -> None:
@@ -202,6 +214,7 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
     # next page visit — see _save_last_run() / GET /api/validation/last.
     per_suite_snapshot: dict[str, dict] = {}
     t_run_start = time.monotonic()
+    cancelled = False
 
     for key in keys:
         module_name, label, func_name = SUITES[key]
@@ -244,6 +257,18 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
                 "wall_sec": round(wall, 2),
                 "results": results_snapshot,
             }
+        except asyncio.CancelledError:
+            # CancelledError is a BaseException, not Exception — caught here
+            # separately so it's swallowed (not re-raised) once the current
+            # suite's cleanup below runs. Re-raising would tear down this
+            # task before we get to emit run-cancelled / flush the sender.
+            cancelled = True
+            emit({"type": "suite-cancelled", "key": key, "label": label})
+            per_suite_snapshot[key] = {
+                "label": label,
+                "status": "cancelled",
+                "results": results_snapshot,
+            }
         except Exception as exc:
             emit({"type": "suite-error", "key": key, "label": label, "message": str(exc)})
             per_suite_snapshot[key] = {
@@ -254,6 +279,23 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
             }
         finally:
             _reset_result_callback(tokens)
+
+        if cancelled:
+            break
+
+    if cancelled:
+        total_wall = time.monotonic() - t_run_start
+        emit({
+            "type": "run-cancelled",
+            "wall_sec": round(total_wall, 2),
+            "completed_keys": [k for k, v in per_suite_snapshot.items() if v["status"] == "done"],
+        })
+        emit(None)
+        await sender_task
+        # Deliberately not written to last_run.json — a cancelled run is
+        # partial by definition, so the next page load should keep showing
+        # the last *completed* run rather than this truncated one.
+        return
 
     total_wall = time.monotonic() - t_run_start
     all_results = [(label, r) for label, suite in suites_run for r in suite.results]

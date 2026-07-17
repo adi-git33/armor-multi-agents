@@ -55,6 +55,14 @@ function reducer(state, action) {
       perSuite[action.key] = { ...(perSuite[action.key] || {}), label: action.label, status: "error", errorMessage: action.message };
       return { ...state, perSuite };
     }
+    case "suite-cancelled": {
+      const perSuite = { ...state.perSuite };
+      perSuite[action.key] = { ...(perSuite[action.key] || {}), label: action.label, status: "cancelled" };
+      return { ...state, perSuite };
+    }
+    case "run-cancelled": {
+      return { ...state, running: false, runningKey: null };
+    }
     case "run-completed": {
       return {
         ...state,
@@ -189,6 +197,12 @@ export function useValidationSocket() {
           case "suite-error":
             dispatch({ type: "suite-error", key: evt.key, label: evt.label, message: evt.message });
             break;
+          case "suite-cancelled":
+            dispatch({ type: "suite-cancelled", key: evt.key, label: evt.label });
+            break;
+          case "run-cancelled":
+            dispatch({ type: "run-cancelled" });
+            break;
           case "run-completed":
             dispatch({
               type: "run-completed",
@@ -247,5 +261,11 @@ export function useValidationSocket() {
     [state.running]
   );
 
-  return { ...state, connected, suites, runSuite, runAll, runAllScenarios };
+  const cancelRun = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !state.running) return;
+    ws.send(JSON.stringify({ type: "cancel" }));
+  }, [state.running]);
+
+  return { ...state, connected, suites, runSuite, runAll, runAllScenarios, cancelRun };
 }

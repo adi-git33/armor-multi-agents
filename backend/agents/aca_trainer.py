@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, accuracy_score
 
 # Ensure intra-backend imports (bus/core/simulation/agents) resolve whether
 # this module is run as `python -m agents.aca_trainer` or `python -m backend.agents.aca_trainer`.
@@ -332,9 +332,12 @@ async def generate_and_train(n_seeds: int = 8) -> None:
     )
     clf.fit(X_train, y_train)
 
+    y_pred        = clf.predict(X_test)
+    held_out_acc  = float(accuracy_score(y_test, y_pred))
+
     print("\n  Classification report on held-out 20%:")
     print(classification_report(
-        y_test, clf.predict(X_test),
+        y_test, y_pred,
         target_names=LABEL_NAMES, zero_division=0,
     ))
 
@@ -362,7 +365,9 @@ async def generate_and_train(n_seeds: int = 8) -> None:
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(MODEL_PATH, "wb") as f:
         pickle.dump({"model": clf, "features": FEATURE_NAMES,
-                     "labels": LABEL_NAMES}, f)
+                     "labels": LABEL_NAMES,
+                     "accuracy": held_out_acc,
+                     "test_support": len(y_test)}, f)
 
     print(f"\n  Model saved -> {MODEL_PATH}")
     print("=" * 65)
