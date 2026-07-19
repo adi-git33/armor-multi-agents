@@ -57,20 +57,9 @@ from simulation.network import NetworkTopology
 from simulation.traffic import TrafficGenerator
 from simulation.attackers import DDoSAttacker, PortScanner
 from agents.tma import TrafficMonitorAgent
+from agents.aca_features import FEATURE_NAMES, extract_features
 
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "aca_model.pkl"
-
-FEATURE_NAMES = [
-    "anomaly_type_enc",     # 0 = VOLUME_SPIKE,  1 = PORT_SCAN
-    "deviation",
-    "severity",
-    "port_count",
-    "port_growth_rate",     # unique ports / seconds since IP first seen
-    "elapsed_scan_secs",    # seconds since this src IP appeared in the tracker
-    "recent_alert_count",   # TMA alerts on this segment in last 30 s
-    "max_deviation_30s",    # highest deviation across that window
-    "cross_segment_count",  # other segments also alerting in last 5 s
-]
 
 LABEL_NOISE     = 0
 LABEL_DDOS      = 1
@@ -209,23 +198,7 @@ async def _run_scenario(
         if now < collection_start:
             return
 
-        # features
-        enc  = 1.0 if c["anomaly_type"] == "PORT_SCAN" else 0.0
-        dev  = float(c.get("deviation",         0.0))
-        sev  = float(c.get("severity",          0.0))
-        pc   = float(c.get("port_count",        0))
-        pgr  = float(c.get("port_growth_rate",  0.0))
-        esc  = float(c.get("elapsed_scan_secs", 0.0))
-
-        window = [a for a in alert_history[seg] if now - a["time"] <= 30.0]
-        recent = float(len(window))
-        maxdev = float(max((a.get("deviation", 0.0) for a in window), default=dev))
-        cross  = float(sum(
-            1 for s, h in alert_history.items()
-            if s != seg and any(now - a["time"] <= 5.0 for a in h)
-        ))
-
-        features = [enc, dev, sev, pc, pgr, esc, recent, maxdev, cross]
+        features = extract_features(c, seg, now, alert_history)
         samples.append((features, _assign_label(c, scenario)))
 
     await bus.start()

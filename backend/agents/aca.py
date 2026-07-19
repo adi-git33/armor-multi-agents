@@ -29,6 +29,8 @@ from pathlib import Path
 import numpy as np
 
 from agents.base import BaseAgent
+from agents._history import append_and_expire
+from agents.aca_features import extract_features
 from bus.message_bus import MessageBus
 from core.messages import Message, Performative, Topic
 
@@ -79,8 +81,8 @@ class AnomalyClassifierAgent(BaseAgent):
 
     async def start(self) -> None:
         await super().start()
-        self.bus.subscribe(Topic.ALERTS, self._on_alert)
-        self.bus.subscribe(Topic.RESOLUTION, self._on_resolution)
+        self.subscribe(Topic.ALERTS, self._on_alert)
+        self.subscribe(Topic.RESOLUTION, self._on_resolution)
         logger.info("[%s] ready — model loaded from %s", self.agent_id, MODEL_PATH)
 
     # ------------------------------------------------------------------
@@ -88,8 +90,6 @@ class AnomalyClassifierAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_resolution(self, msg: Message) -> None:
-        if not self._running:
-            return
         self.on_incident_resolved(msg.content)
 
     def on_incident_resolved(self, resolution: dict) -> None:
@@ -116,23 +116,14 @@ class AnomalyClassifierAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_alert(self, msg: Message) -> None:
-        if not self._running:
-            return
-
         c   = msg.content
         seg = c["segment"]
         now = time.monotonic()
 
         # Update history
-        if seg not in self._history:
-            self._history[seg] = []
-        self._history[seg].append({"time": now, **c})
-
-        # Expire old entries
-        self._history[seg] = [
-            a for a in self._history[seg]
-            if now - a["time"] <= HISTORY_WINDOW
-        ]
+        self._history[seg] = append_and_expire(
+            self._history.get(seg, []), {"time": now, **c}, now, HISTORY_WINDOW
+        )
 
         # ── Layer 1: fast noise filter ────────────────────────────────
         dev         = c.get("deviation", 0.0)
@@ -150,22 +141,19 @@ class AnomalyClassifierAgent(BaseAgent):
             return
 
         # ── Layer 2: trained model ────────────────────────────────────
-        features = self._extract_features(c, seg, now)
+        features = extract_features(c, seg, now, self._history)
         proba    = self._clf.predict_proba([features])[0]
         label_idx  = int(np.argmax(proba))
         confidence = float(proba[label_idx])
         classification = self._labels[label_idx]
 
-        # evidence summary
-        window_devs = [a.get("deviation", 0.0) for a in recent_hist]
-        cross = sum(
-            1 for s, hist in self._history.items()
-            if s != seg and any(now - a["time"] <= 5.0 for a in hist)
-        )
+        # evidence summary — reuse the feature vector's own window stats
+        # (recent_alert_count / max_deviation_30s / cross_segment_count)
+        # instead of recomputing them a second time.
         evidence = {
-            "alert_count_30s": recent_count,
-            "max_deviation_30s": max(window_devs, default=dev),
-            "cross_segment_count": cross,
+            "alert_count_30s": int(features[6]),
+            "max_deviation_30s": features[7],
+            "cross_segment_count": int(features[8]),
             "port_count": c.get("port_count", 0),
             "filter": "layer2_model",
         }
@@ -178,33 +166,6 @@ class AnomalyClassifierAgent(BaseAgent):
             severity=c.get("severity", 0.0),
             content=c, evidence=evidence,
         )
-
-    # ------------------------------------------------------------------
-    # Feature extraction  (must match aca_trainer.py FEATURE_NAMES)
-    # ------------------------------------------------------------------
-
-    def _extract_features(
-        self, c: dict, seg: str, now: float
-    ) -> list[float]:
-        enc  = 1.0 if c["anomaly_type"] == "PORT_SCAN" else 0.0
-        dev  = float(c.get("deviation",         0.0))
-        sev  = float(c.get("severity",          0.0))
-        pc   = float(c.get("port_count",        0))
-        pgr  = float(c.get("port_growth_rate",  0.0))
-        esc  = float(c.get("elapsed_scan_secs", 0.0))
-
-        hist   = self._history.get(seg, [])
-        window = [a for a in hist if now - a["time"] <= 30.0]
-        recent_count = float(len(window))
-        max_dev      = float(max((a.get("deviation", 0.0) for a in window),
-                                  default=dev))
-        cross = float(sum(
-            1 for s, h in self._history.items()
-            if s != seg and any(now - a["time"] <= 5.0 for a in h)
-        ))
-
-        # Order must match FEATURE_NAMES in aca_trainer.py
-        return [enc, dev, sev, pc, pgr, esc, recent_count, max_dev, cross]
 
     # ------------------------------------------------------------------
     # Publish threat report

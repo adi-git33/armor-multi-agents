@@ -31,8 +31,8 @@ from simulation.attackers import DDoSAttacker
 from agents.tma import TrafficMonitorAgent
 from agents.aca import AnomalyClassifierAgent
 from agents.rca import (
-    ResponseCoordinatorAgent, VOTE_WINDOW, RESOLUTION_COOLDOWN, ACTIONS,
-    ESCALATION_ACTIONS, ESCALATION_WINDOW,
+    ResponseCoordinatorAgent, VOTE_WINDOW,
+    ESCALATION_ACTIONS,
 )
 from bus.message_bus import MessageBus
 from core.messages   import Topic

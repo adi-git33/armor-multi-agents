@@ -60,7 +60,7 @@ REQUIRED_REPORT_FIELDS = {
 }
 
 
-async def main() -> None:
+async def test_anomaly_classifier_agent() -> None:
     print("=" * 65)
     print("  Part 5 Test  |  Anomaly Classifier Agent (ACA)")
     print("=" * 65)
@@ -282,7 +282,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 65)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

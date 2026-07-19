@@ -35,6 +35,7 @@ from agents.raa  import ResourceAllocatorAgent
 from bus.message_bus import MessageBus
 from core.messages   import Topic
 from helpers import ValidationSuite, section
+from scenario_lib import measure_resource_overhead
 
 MAX_AUCTION_MS   = 300
 MAX_NOTIFY_MS    = 100
@@ -164,19 +165,13 @@ async def run() -> ValidationSuite:
 
     # ── FR-23: Resource overhead < 40% ────────────────────────────────
     section("FR-23  Total system resource usage ≤ 40% of host capacity")
-    try:
-        import psutil
-        proc      = psutil.Process()
-        cpu_pct   = proc.cpu_percent(interval=1.0) / max(psutil.cpu_count(), 1)
-        mem_pct   = proc.memory_info().rss / psutil.virtual_memory().total
-        overhead  = (cpu_pct / 100 + mem_pct) / 2
+    overhead, cpu_pct, mem_pct = measure_resource_overhead(interval=1.0)
+    if cpu_pct is not None:
         suite.check("FR-23",
                     f"MAS overhead ≤ {MAX_OVERHEAD_PCT*100:.0f}% of host capacity",
                     overhead < MAX_OVERHEAD_PCT,
                     observed=f"{overhead*100:.1f}% (cpu={cpu_pct:.1f}% mem={mem_pct*100:.2f}%)",
                     expected=f"< {MAX_OVERHEAD_PCT*100:.0f}%")
-    except ImportError:
-        overhead = 0.05
         suite.check("FR-23",
                     f"MAS overhead ≤ {MAX_OVERHEAD_PCT*100:.0f}% of host capacity",
                     True,

@@ -18,18 +18,21 @@ No real network packets — the agents and their decision logic are real; the ne
 python -m agents.aca_trainer
 
 # 2. Run the full integration test (all agents, ~38 s)
-python test_integration.py
+pytest tests/test_integration.py
 
 # 3. Run individual part tests
-python test_part1.py   # Network simulation
-python test_part2.py   # Attackers
-python test_part3.py   # Message bus
-python test_part4.py   # TMA
-python test_part5.py   # ACA
-python test_part6.py   # RCA
-python test_part7.py   # TIA
-python test_part8.py   # RAA
- python tests/test_part9_tma_5min_metrics.py  # TMA 5-min metrics
+pytest tests/test_part1.py   # Network simulation
+pytest tests/test_part2.py   # Attackers
+pytest tests/test_part3.py   # Message bus
+pytest tests/test_part4.py   # TMA
+pytest tests/test_part5.py   # ACA
+pytest tests/test_part6.py   # RCA
+pytest tests/test_part7.py   # TIA
+pytest tests/test_part8.py   # RAA
+pytest tests/test_part9_tma_5min_metrics.py  # TMA 5-min metrics
+
+# or just run everything:
+pytest
 ```
 
 **Requirements:** Python 3.10+, `numpy>=2.0`, `scikit-learn>=1.4`
@@ -108,7 +111,7 @@ Traffic per segment is drawn from `N(mean, std²)` at 10 Hz. The `TrafficGenerat
 
 **Warmup guard:** until a segment's window holds `MIN_BASELINE_SAMPLES` (30 = 3 s), `get_stats()` reports the configured design baseline with deviation 0. With fewer samples the std collapses toward the 1-pps div-by-zero guard, and the first readings after startup would otherwise register as "+100σ attacks" — firing spurious alerts and poisoning ACA's 30 s max-deviation feature.
 
-**Test:** `test_part1.py`
+**Test:** `pytest tests/test_part1.py`
 
 ---
 
@@ -130,7 +133,7 @@ Traffic per segment is drawn from `N(mean, std²)` at 10 Hz. The `TrafficGenerat
 - Injects low-volume bursts (does not spike pps above the volume threshold)
 - Deposits individual `Packet` objects into the generator's attack-packet buffer so TMA can inspect port diversity
 
-**Test:** `test_part2.py`
+**Test:** `pytest tests/test_part2.py`
 
 ---
 
@@ -164,7 +167,7 @@ Performatives used: `INFORM`, `ACCEPT`, `REJECT`, `CALL_FOR_PROPOSAL`, `FAILURE`
 | `resource-bids` | (future) | RAA |
 | `resource-grants` | RAA | (consumers) |
 
-**Test:** `test_part3.py`
+**Test:** `pytest tests/test_part3.py`
 
 ---
 
@@ -191,7 +194,7 @@ Alert fields: `segment`, `anomaly_type`, `src_ip`, `ports_scanned`, `port_count`
 
 **Design note:** TMA is the sole packet sensor. ACA never reads traffic directly — it only classifies what TMA reports. This maintains clean separation of concerns.
 
-**Test:** `test_part4.py` — 8/8 PASS
+**Test:** `pytest tests/test_part4.py` — 8/8 PASS
 
 ---
 
@@ -233,7 +236,7 @@ Features: `anomaly_type_enc`, `deviation`, `severity`, `port_count`, `port_growt
 
 Output (published to `threat-reports`): `segment`, `classification`, `confidence`, `severity`, `recommended_action`, `source_alert`, `evidence` (includes `src_ip` for PORT_SCAN alerts so RCA can target enforcement correctly).
 
-**Test:** `test_part5.py` — 12/12 PASS
+**Test:** `pytest tests/test_part5.py` — 12/12 PASS
 
 ---
 
@@ -281,7 +284,7 @@ _on_threat_report / _on_threat_intel
 
 **Enforcement target:** The resolution carries `enforcement_target` so RAA knows exactly which resource to apply the action to (which IP to block, which segment to quarantine).
 
-**Test:** `test_part6.py` — 13/13 PASS
+**Test:** `pytest tests/test_part6.py` — 13/13 PASS
 
 ---
 
@@ -313,7 +316,7 @@ TIA subscribes to `coalition`. When RCA publishes a CFP, TIA:
 2. Votes ACCEPT (always — no contradicting-evidence logic yet)
 3. Includes `intel_count` in the vote so RCA can see the quality of corroboration
 
-**Test:** `test_part7.py` — 8/8 PASS
+**Test:** `pytest tests/test_part7.py` — 8/8 PASS
 
 ---
 
@@ -359,7 +362,7 @@ High confidence + unanimous vote = high bid = priority access.
 ### Enforcement state
 RAA maintains `blocked_ips: set[str]` and `quarantined_segments: set[str]`. These represent what the enforcement layer *would* apply to a real firewall or VLAN controller. Wiring to an actual enforcement API requires only changing the `_enforce()` method — all agent logic above it stays the same.
 
-**Test:** `test_part8.py` — 8/8 PASS
+**Test:** `pytest tests/test_part8.py` — 8/8 PASS
 
 ---
 
@@ -451,7 +454,9 @@ cyberDefenseProtoType/
 |   +-- enforcement.py     EnforcementStub (RAA placeholder for tests)
 |
 |-- agents/
-|   |-- base.py            BaseAgent (lifecycle, publish helper)
+|   |-- base.py            BaseAgent (lifecycle, subscribe/guard, publish helper)
+|   |-- _history.py        Shared sliding-window/cooldown helpers
+|   |-- aca_features.py    Shared ACA feature vector (aca.py + aca_trainer.py)
 |   |-- tma.py             TrafficMonitorAgent  (Part 4)
 |   |-- aca_trainer.py     Synthetic data + DecisionTree training  (Part 5)
 |   |-- aca.py             AnomalyClassifierAgent  (Part 5)
@@ -459,6 +464,26 @@ cyberDefenseProtoType/
 |   |-- tia.py             ThreatIntelligenceAgent  (Part 7)
 |   +-- raa.py             ResourceAllocatorAgent  (Part 8)
 |
-|-- test_part1.py  through  test_part8.py    Per-agent unit tests
-+-- test_integration.py                      Full system scenario test
+|-- dashboard/             Live-dashboard state/presentation (used by server.py)
+|   |-- state_collector.py StateCollector — observes the bus, builds display state
+|   |-- scoring.py         Confusion-matrix judging + DR/FPR/MTTR/availability/SW formulas
+|   |-- snapshot.py        JSON view-model assembly for the WebSocket broadcast
+|   |-- beliefs.py         Agent-inspector belief-base presentation
+|   |-- ui_metadata.py     Segment/agent display config, BDI desire/plan tables
+|   +-- metrics_store.py   ACA confusion-matrix JSON persistence
+|-- sim_engine.py          SimEngine — MAS lifecycle + scenario switching
+|-- routes.py              Plain HTTP routes
+|-- websocket.py           WebSocket broadcast loop + inbound command dispatch
+|-- server.py              FastAPI app assembly (uvicorn entry point)
+|
+|-- scripts/               Manual debug/demo utilities (not part of the live app)
+|   |-- main.py            Part 1 console demo
+|   |-- demo_attack.py     Part 2 scripted attack demo
+|   |-- show_packets.py    Sample-packet inspector
+|   |-- show_topology.py   Network topology inspector
+|   +-- seed_aca_metrics.py  Bootstraps models/aca_metrics.json
+|
++-- tests/                 pytest suite (pytest.ini + conftest.py at backend/ root)
+    |-- test_part1.py  through  test_part8.py    Per-agent unit tests
+    +-- test_integration.py                      Full system scenario test
 ```

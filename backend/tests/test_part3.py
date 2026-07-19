@@ -23,7 +23,7 @@ def _msg(perf, sender, topic, content, seq=0, **kw) -> Message:
                    topic=topic, content=content, seq=seq, **kw)
 
 
-async def main() -> None:
+async def test_message_bus() -> None:
     print("=" * 65)
     print("  Part 3 Test  |  Message Bus")
     print("=" * 65)
@@ -221,7 +221,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 65)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

@@ -1,17 +1,17 @@
 {
   "dr": 1.0,
-  "fpr": 0.0,
-  "mttr_ms": 26.0,
-  "sw": 0.9553,
+  "fpr": 0.1667,
+  "mttr_ms": 2385.3,
+  "sw": 0.7421,
   "overhead": 0.0052,
   "auction_ok": 1.0,
   "attacks": 5,
   "confusion": {
     "tp": 13,
-    "fp": 0,
-    "fn": 1,
-    "tn": 7
+    "fp": 1,
+    "fn": 0,
+    "tn": 5
   },
-  "grants": 5,
-  "denials": 1
+  "grants": 6,
+  "denials": 0
 }

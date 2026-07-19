@@ -60,7 +60,7 @@ COLLECT  = 3.0   # s — allow final messages to settle
 SCANNER_IP = "45.33.32.156"   # PortScanner's fixed src_ip
 
 
-async def main() -> None:
+async def test_full_system_integration() -> None:
     print("=" * 70)
     print("  Full System Integration Test")
     print("  TMA | ACA | TIA | RCA | RAA")
@@ -350,7 +350,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 70)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

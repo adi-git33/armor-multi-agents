@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextvars
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
 

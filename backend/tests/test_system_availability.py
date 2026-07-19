@@ -35,24 +35,12 @@ Expected runtime: 300 s  (5 minutes)
 Usage
 -----
     cd backend
-    python -m tests.test_system_availability
+    pytest tests/test_system_availability.py
 """
 
 from __future__ import annotations
-import asyncio
-import io
-import sys
-from pathlib import Path
 
-sys.stdout = io.TextIOWrapper(
-    sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-)
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
-
-from validation.system_availability import (  # noqa: E402
+from validation.system_availability import (
     ATTACK_PLAN,
     AVAIL_TARGET,
     BUFFER_SECS,
@@ -71,7 +59,7 @@ def sep(char: str = "=") -> None:
     print(char * W)
 
 
-async def main() -> bool:
+async def test_system_availability() -> None:
     sep()
     print("  System Availability Test  (Validation §V-SYS-01)")
     sep()
@@ -151,9 +139,6 @@ async def main() -> bool:
 
     print()
     sep()
-    return result.passed
-
-
-if __name__ == "__main__":
-    passed = asyncio.run(main())
-    sys.exit(0 if passed else 1)
+    assert result.passed, (
+        f"availability {result.availability*100:.3f}% < {AVAIL_TARGET*100:.1f}% threshold"
+    )

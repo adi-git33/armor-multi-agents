@@ -30,6 +30,7 @@ from core.models import TrafficSample
 from bus.message_bus import MessageBus
 from simulation.traffic import TrafficGenerator
 from agents.base import BaseAgent
+from agents._history import cooldown_ok
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ class TrafficMonitorAgent(BaseAgent):
 
     async def start(self) -> None:
         await super().start()
-        self._gen.on_sample(self._on_sample)
+        self._gen.on_sample(self._guarded(self._on_sample))
         logger.info("[%s] monitoring %d segment(s) (volume + port-scan)",
                     self.agent_id, len(self._beliefs))
 
@@ -117,8 +118,6 @@ class TrafficMonitorAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_sample(self, sample: TrafficSample) -> None:
-        if not self._running:
-            return
         if self._segment_id is not None and sample.segment != self._segment_id:
             return
         await self._check_volume(sample)
@@ -133,21 +132,21 @@ class TrafficMonitorAgent(BaseAgent):
         belief = self._beliefs[sample.segment]
         now    = time.monotonic()
 
-        is_anomaly  = abs(stats.deviation) >= ANOMALY_THRESHOLD
-        cooldown_ok = (now - belief["last_alert_time"]) >= ALERT_COOLDOWN
+        is_anomaly     = abs(stats.deviation) >= ANOMALY_THRESHOLD
+        cooldown_clear = cooldown_ok(belief["last_alert_time"], now, ALERT_COOLDOWN)
 
         # Escalation re-alert: the last alert went out below the escalation
         # line and the deviation has since crossed it — the anomaly sharpened
         # mid-cooldown. One bypass per cooldown window.
         escalation = (
             is_anomaly
-            and not cooldown_ok
+            and not cooldown_clear
             and not belief["escalated"]
             and abs(stats.deviation) >= ESCALATION_THRESHOLD
             and belief["last_alert_dev"] < ESCALATION_THRESHOLD
         )
 
-        if is_anomaly and (cooldown_ok or escalation):
+        if is_anomaly and (cooldown_clear or escalation):
             belief["state"]           = SegmentState.ANOMALY
             belief["last_alert_time"] = now
             belief["alert_count"]    += 1
@@ -217,7 +216,7 @@ class TrafficMonitorAgent(BaseAgent):
                 continue
 
             key = (seg, src_ip)
-            if now - self._scan_alerted.get(key, 0.0) < PORT_SCAN_COOLDOWN:
+            if not cooldown_ok(self._scan_alerted.get(key, 0.0), now, PORT_SCAN_COOLDOWN):
                 continue
 
             self._scan_alerted[key] = now

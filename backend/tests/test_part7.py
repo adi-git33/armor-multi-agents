@@ -23,14 +23,12 @@ own self-trigger does NOT fire alone — escalation must come from TIA.
 """
 
 import asyncio
-import time
 
 from bus.message_bus import MessageBus
 from core.messages import Message, Performative, Topic
 from agents.tia import (
     ThreatIntelligenceAgent,
-    INTEL_WINDOW, PATTERN_COOLDOWN,
-    MULTI_SEGMENT_THRESHOLD, COORDINATED_DDOS_THRESHOLD,
+    COORDINATED_DDOS_THRESHOLD,
 )
 from agents.rca import ResponseCoordinatorAgent, VOTE_WINDOW
 from simulation.enforcement import EnforcementStub
@@ -85,7 +83,7 @@ def _ddos_report(segment: str, confidence: float = MID_CONF):
     )
 
 
-async def main() -> None:
+async def test_threat_intelligence_agent() -> None:
     print("=" * 65)
     print("  Part 7 Test  |  Threat Intelligence Agent (TIA)")
     print("=" * 65)
@@ -322,7 +320,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 65)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

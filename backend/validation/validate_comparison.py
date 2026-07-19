@@ -33,22 +33,20 @@ import argparse
 import asyncio
 import json
 import sys
-import time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
 
-from scenario_lib import SEEDS, OFAT_SCENARIOS, BASELINE_SCENARIOS
-from validate_ablation import ROWS, _run_row_scenario, run as run_ablation
+from scenario_lib import (
+    SEEDS, OFAT_SCENARIOS, BASELINE_SCENARIOS, ROWS,
+    build_system, run_row_scenario,
+)
+from validate_ablation import run as run_ablation
 from agents.tma  import TrafficMonitorAgent
 from agents.aca  import AnomalyClassifierAgent
-from simulation.clock     import SimClock
-from simulation.network   import NetworkTopology
-from simulation.traffic   import TrafficGenerator
 from simulation.attackers import DDoSAttacker
-from bus.message_bus import MessageBus
 from core.messages    import Topic
 from helpers import section
 
@@ -56,19 +54,10 @@ BASELINE_FLAGS = ROWS[0][1]    # "Full baseline"  — all four naive
 ADVANCED_FLAGS = ROWS[-1][1]   # "Full advanced"  — today's default
 
 
-async def _make_system(seed: int):
-    clock    = SimClock(speed=1.0)
-    topology = NetworkTopology()
-    bus      = MessageBus()
-    gen      = TrafficGenerator(topology, clock, rng_seed=seed)
-    await bus.start()
-    return bus, gen, topology
-
-
 async def _s4_control(seed: int = 140) -> float:
     """Detection-only control — no RCA/RAA/TIA, so the four flags cannot
     move this. Sanity check that S4 differs negligibly between modes."""
-    bus, gen, _ = await _make_system(seed)
+    bus, gen, _ = await build_system(seed)
     tma = TrafficMonitorAgent("TMA:c4", bus, gen)
     aca = AnomalyClassifierAgent("ACA:c4", bus)
     await tma.start(); await aca.start()
@@ -104,8 +93,8 @@ async def run(seeds: list[int] | None = None, skip_ofat: bool = False) -> dict:
 
     per_scenario: dict[str, dict] = {}
     for sid in OFAT_SCENARIOS:
-        baseline = await _run_row_scenario(sid, seeds, BASELINE_FLAGS)
-        advanced = await _run_row_scenario(sid, seeds, ADVANCED_FLAGS)
+        baseline = await run_row_scenario(sid, seeds, BASELINE_FLAGS)
+        advanced = await run_row_scenario(sid, seeds, ADVANCED_FLAGS)
         delta = advanced["mean"] - baseline["mean"]
         per_scenario[f"S{sid}"] = {
             "baseline": baseline, "advanced": advanced,

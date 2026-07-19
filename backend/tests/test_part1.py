@@ -11,7 +11,7 @@ DISPLAY_INTERVAL = 1.0
 SEG_ORDER = ["public-facing", "server", "internal", "sec-mon"]
 
 
-async def main():
+async def test_network_simulation():
     print("=" * 70)
     print("  Part 1 Test  |  Running for 5 seconds then auto-stopping")
     print("=" * 70)
@@ -147,7 +147,4 @@ async def main():
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 70)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

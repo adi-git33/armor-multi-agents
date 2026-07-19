@@ -25,7 +25,7 @@ import asyncio
 import time
 
 from bus.message_bus import MessageBus
-from core.messages import Performative, Topic
+from core.messages import Topic
 from simulation.clock import SimClock
 from simulation.network import NetworkTopology
 from simulation.traffic import TrafficGenerator, SAMPLE_INTERVAL
@@ -39,7 +39,7 @@ ATTACK   = 10.0  # seconds of DDoS
 RECOVERY = 4.0   # seconds after attack ends before final check
 
 
-async def main() -> None:
+async def test_traffic_monitor_agent() -> None:
     print("=" * 65)
     print("  Part 4 Test  |  Traffic Monitor Agent (TMA)")
     print("=" * 65)
@@ -205,7 +205,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 65)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

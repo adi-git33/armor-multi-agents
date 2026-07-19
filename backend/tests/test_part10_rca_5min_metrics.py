@@ -28,21 +28,14 @@ import math
 import os
 import random
 import statistics
-import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from agents.aca import AnomalyClassifierAgent
 from agents.raa import ResourceAllocatorAgent
 from agents.rca import (
     ACTIONS,
     MIN_CONFIDENCE,
-    RESOLUTION_COOLDOWN,
     ResponseCoordinatorAgent,
     VOTE_WINDOW,
 )
@@ -1355,7 +1348,7 @@ def _render_report(test_a: dict, test_b: dict, test_c: dict) -> None:
     )
 
 
-async def main() -> None:
+async def test_rca_5min_metrics() -> None:
     CHECK_LOG.clear()
 
     print("=" * 80)
@@ -1387,7 +1380,3 @@ async def main() -> None:
     else:
         print("\nOverall: ALL PASS")
     print("=" * 80)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

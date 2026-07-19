@@ -45,7 +45,7 @@ from agents.tia  import ThreatIntelligenceAgent
 from bus.message_bus import MessageBus
 from core.messages   import Topic
 from helpers import ValidationSuite, section
-from scenario_lib import priority_ok_label, _sw
+from scenario_lib import priority_ok_label, _sw, measure_resource_overhead
 
 RESULTS_PATH = _HERE / "stress_results.json"
 
@@ -220,15 +220,7 @@ async def run() -> ValidationSuite:
                 note="rung-0 THROTTLE executes in-tick; escalation to voted quarantine is policy, not latency")
 
     # ── ST-05 (computed early — SW needs overhead): resource overhead ──
-    cpu_pct = mem_pct = None
-    try:
-        import psutil
-        proc     = psutil.Process()
-        cpu_pct  = proc.cpu_percent(interval=0.5) / max(psutil.cpu_count(), 1)
-        mem_pct  = proc.memory_info().rss / psutil.virtual_memory().total
-        overhead = (cpu_pct / 100 + mem_pct) / 2
-    except ImportError:
-        overhead = 0.05
+    overhead, cpu_pct, mem_pct = measure_resource_overhead(interval=0.5)
 
     # ── ST-04: Social Welfare ──────────────────────────────────────────
     section("ST-04  Social Welfare ≥ 0.80 under stress")

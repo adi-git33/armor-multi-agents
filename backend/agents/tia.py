@@ -35,6 +35,7 @@ import time
 from collections import defaultdict
 
 from agents.base import BaseAgent
+from agents._history import append_and_expire, cooldown_ok
 from bus.message_bus import MessageBus
 from core.messages import Message, Performative, Topic
 
@@ -77,8 +78,8 @@ class ThreatIntelligenceAgent(BaseAgent):
 
     async def start(self) -> None:
         await super().start()
-        self.bus.subscribe(Topic.THREAT_REPORTS, self._on_threat_report)
-        self.bus.subscribe(Topic.COALITION,      self._on_cfp)
+        self.subscribe(Topic.THREAT_REPORTS, self._on_threat_report)
+        self.subscribe(Topic.COALITION,      self._on_cfp)
         logger.info("[%s] ready", self.agent_id)
 
     # ------------------------------------------------------------------
@@ -86,20 +87,15 @@ class ThreatIntelligenceAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_threat_report(self, msg: Message) -> None:
-        if not self._running:
-            return
-
         c   = msg.content
         seg = c.get("segment", "")
         clf = c.get("classification", "")
         now = time.monotonic()
 
         # Update per-segment history
-        self._history[seg].append({"time": now, **c})
-        self._history[seg] = [
-            r for r in self._history[seg]
-            if now - r["time"] <= INTEL_WINDOW
-        ]
+        self._history[seg] = append_and_expire(
+            self._history[seg], {"time": now, **c}, now, INTEL_WINDOW
+        )
 
         # Track src_ip across segments (carried in ACA's evidence dict)
         evidence = c.get("evidence", {})
@@ -133,7 +129,7 @@ class ThreatIntelligenceAgent(BaseAgent):
             return
 
         cooldown_key = f"MULTI_SEGMENT_SCAN:{src_ip}"
-        if now - self._pattern_cooldown.get(cooldown_key, 0.0) < PATTERN_COOLDOWN:
+        if not cooldown_ok(self._pattern_cooldown.get(cooldown_key, 0.0), now, PATTERN_COOLDOWN):
             return
         self._pattern_cooldown[cooldown_key] = now
 
@@ -184,7 +180,7 @@ class ThreatIntelligenceAgent(BaseAgent):
             return
 
         cooldown_key = f"COORDINATED_DDOS:{','.join(sorted(ddos_segments))}"
-        if now - self._pattern_cooldown.get(cooldown_key, 0.0) < PATTERN_COOLDOWN:
+        if not cooldown_ok(self._pattern_cooldown.get(cooldown_key, 0.0), now, PATTERN_COOLDOWN):
             return
         self._pattern_cooldown[cooldown_key] = now
 
@@ -218,8 +214,6 @@ class ThreatIntelligenceAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_cfp(self, msg: Message) -> None:
-        if not self._running:
-            return
         if msg.performative != Performative.CALL_FOR_PROPOSAL:
             return
 

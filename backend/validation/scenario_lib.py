@@ -27,6 +27,7 @@ it; 12s reliably does (verified empirically against this exact model).
 """
 from __future__ import annotations
 import asyncio
+import statistics
 import time
 from dataclasses import dataclass, field
 
@@ -51,7 +52,11 @@ def _sw(u_tma, u_aca, u_rca, u_raa, u_tia) -> float:
             W["RAA"] * u_raa + W["TIA"] * u_tia)
 
 
-async def _make_system(seed: int):
+async def build_system(seed: int):
+    """Canonical (bus, gen, topology) bootstrap shared by every validate_*
+    scenario runner that doesn't need a fixed agent set pre-built (for that,
+    see validate_system.py's own _build_system, which bundles all five
+    agents and is not started the same way)."""
     clock    = SimClock(speed=1.0)
     topology = NetworkTopology()
     bus      = MessageBus()
@@ -80,6 +85,24 @@ async def _peer_accept_voter(bus: MessageBus, agent_id: str = "PEER:voter") -> N
             content      = {"incident_id": msg.content.get("incident_id", "")},
         ))
     bus.subscribe(Topic.COALITION, _on_cfp)
+
+
+def measure_resource_overhead(
+    interval: float = 0.5,
+) -> tuple[float, float | None, float | None]:
+    """Approximate MAS resource overhead as the average of this process's
+    CPU-percent-of-total-cores and RSS-fraction-of-total-memory, sampled
+    over `interval` seconds. Returns (overhead, cpu_pct, mem_pct); cpu_pct/
+    mem_pct are None (and overhead a fixed 5% estimate) if psutil isn't
+    installed."""
+    try:
+        import psutil
+        proc    = psutil.Process()
+        cpu_pct = proc.cpu_percent(interval=interval) / max(psutil.cpu_count(), 1)
+        mem_pct = proc.memory_info().rss / psutil.virtual_memory().total
+        return (cpu_pct / 100 + mem_pct) / 2, cpu_pct, mem_pct
+    except ImportError:
+        return 0.05, None, None
 
 
 def priority_ok_label(
@@ -136,7 +159,7 @@ async def run_scenario_1(
     use_tia: bool = True, naive_auction: bool = False,
     attach_peer_voter: bool = False,
 ) -> ScenarioResult:
-    bus, gen, _ = await _make_system(gen_seed)
+    bus, gen, _ = await build_system(gen_seed)
     tma = TrafficMonitorAgent("TMA:s1", bus, gen)
     aca = AnomalyClassifierAgent("ACA:s1", bus)
     rca = ResponseCoordinatorAgent("RCA:s1", bus, naive_ladder=naive_ladder, naive_voting=naive_voting)
@@ -196,7 +219,7 @@ async def run_scenario_2(
     use_tia: bool = True, naive_auction: bool = False,
     attach_peer_voter: bool = False,
 ) -> ScenarioResult:
-    bus, gen, _ = await _make_system(gen_seed)
+    bus, gen, _ = await build_system(gen_seed)
     tma = TrafficMonitorAgent("TMA:s2", bus, gen)
     aca = AnomalyClassifierAgent("ACA:s2", bus)
     rca = ResponseCoordinatorAgent("RCA:s2", bus, naive_ladder=naive_ladder, naive_voting=naive_voting)
@@ -266,7 +289,7 @@ async def run_scenario_3(
     use_tia: bool = True, naive_auction: bool = False,
     attach_peer_voter: bool = False,
 ) -> ScenarioResult:
-    bus, gen, _ = await _make_system(gen_seed)
+    bus, gen, _ = await build_system(gen_seed)
     tma = TrafficMonitorAgent("TMA:s3", bus, gen)
     aca = AnomalyClassifierAgent("ACA:s3", bus)
     rca = ResponseCoordinatorAgent("RCA:s3", bus, naive_ladder=naive_ladder, naive_voting=naive_voting)
@@ -306,14 +329,7 @@ async def run_scenario_3(
     denied_bids  = [d.get("bid_value", 0) for d in all_denials]
     priority_result = priority_ok_label(naive_auction, granted_bids, denied_bids, denials=all_denials)
 
-    try:
-        import psutil
-        proc = psutil.Process()
-        cpu  = proc.cpu_percent(interval=0.5) / max(psutil.cpu_count(), 1)
-        mem  = proc.memory_info().rss / psutil.virtual_memory().total
-        overhead = (cpu / 100 + mem) / 2
-    except ImportError:
-        overhead = 0.05
+    overhead, _cpu_pct, _mem_pct = measure_resource_overhead()
 
     sw = _sw(0.90, 0.90, 0.90, max(0.0, 1.0 - overhead), 0.85)
     _S3_ATTACKED = {"public-facing", "server", "internal"}
@@ -340,7 +356,7 @@ async def run_scenario_6(
     use_tia: bool = True, naive_auction: bool = False,
     attach_peer_voter: bool = False,
 ) -> ScenarioResult:
-    bus, gen, _ = await _make_system(gen_seed)
+    bus, gen, _ = await build_system(gen_seed)
     tma = TrafficMonitorAgent("TMA:s6", bus, gen)
     aca = AnomalyClassifierAgent("ACA:s6", bus)
     rca = ResponseCoordinatorAgent("RCA:s6", bus, naive_ladder=naive_ladder, naive_voting=naive_voting)
@@ -406,3 +422,47 @@ async def run_scenario_6(
         extra={"proposals": len(proposals), "resolutions": resolutions,
                "vote_cycle_ms": vote_cycle_ms},
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# OFAT 6-row sweep — shared by validate_ablation.py (the sweep itself) and
+# validate_comparison.py (delegates §3.2 here instead of recomputing the
+# 6-row mechanism table a second time).
+# ══════════════════════════════════════════════════════════════════════════
+RUNNERS = {1: run_scenario_1, 2: run_scenario_2, 3: run_scenario_3, 6: run_scenario_6}
+
+ROWS = [
+    ("Full baseline",     dict(naive_ladder=True,  naive_voting=True,  use_tia=False, naive_auction=True),  "— (reference floor)"),
+    ("+ proportionality", dict(naive_ladder=False, naive_voting=True,  use_tia=False, naive_auction=True),  "§4.1 marginal effect"),
+    ("+ voting",          dict(naive_ladder=True,  naive_voting=False, use_tia=False, naive_auction=True),  "§4.4 marginal effect"),
+    ("+ coalition",       dict(naive_ladder=True,  naive_voting=True,  use_tia=True,  naive_auction=True),  "§4.3 marginal effect"),
+    ("+ auction",         dict(naive_ladder=True,  naive_voting=True,  use_tia=False, naive_auction=False), "§4.2 marginal effect"),
+    ("Full advanced",     dict(naive_ladder=False, naive_voting=False, use_tia=True,  naive_auction=False), "— (reference ceiling)"),
+]
+
+
+def _mean_std(values: list[float]) -> tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    mean = statistics.mean(values)
+    std  = statistics.stdev(values) if len(values) > 1 else 0.0
+    return mean, std
+
+
+async def run_row_scenario(scenario_id: int, seeds: list[int], flags: dict) -> dict:
+    """Run one OFAT row's scenario across `seeds`, returning mean/std/raw SW."""
+    runner = RUNNERS[scenario_id]
+    sw_vals: list[float] = []
+    raw: dict[int, float] = {}
+    for seed in seeds:
+        kwargs = dict(flags, attach_peer_voter=True)
+        if scenario_id == 3:
+            result = await runner(gen_seed=seed, atk_seed_a=seed, atk_seed_b=seed + 1, atk_seed_c=seed + 2, **kwargs)
+        elif scenario_id == 2:
+            result = await runner(gen_seed=seed, atk_seed_a=seed, atk_seed_b=seed + 1, **kwargs)
+        else:
+            result = await runner(gen_seed=seed, atk_seed=seed, **kwargs)
+        sw_vals.append(result.sw)
+        raw[seed] = result.sw
+    mean, std = _mean_std(sw_vals)
+    return {"mean": mean, "std": std, "raw": raw}

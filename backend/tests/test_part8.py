@@ -67,7 +67,7 @@ def _resolution(
 
 # ── test ──────────────────────────────────────────────────────────────
 
-async def main() -> None:
+async def test_resource_allocator_agent() -> None:
     print("=" * 65)
     print("  Part 8 Test  |  Resource Allocator Agent (RAA)")
     print("=" * 65)
@@ -331,7 +331,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 65)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

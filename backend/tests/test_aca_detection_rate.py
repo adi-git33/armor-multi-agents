@@ -33,18 +33,7 @@ Expected runtime: ~90 s  (5 scenarios x ~18 s each)
 from __future__ import annotations
 import asyncio
 import logging
-import io
-import sys
 import time
-from pathlib import Path
-
-# Force UTF-8 output on Windows terminals that default to a narrow code page
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from bus.message_bus import MessageBus
 from core.messages import Topic
@@ -354,7 +343,7 @@ def print_alert_table(sc: dict, classified: list[dict]) -> tuple[int, int]:
 # Main
 # ---------------------------------------------------------------------
 
-async def main() -> bool:
+async def test_aca_detection_rate() -> None:
     print("=" * W)
     print("  ACA Detection Rate Test  (Validation §V-ACA-01)")
     print("  Pipeline : TMA -> ALERTS bus -> ACA -> THREAT_REPORTS bus")
@@ -501,9 +490,7 @@ async def main() -> bool:
 
     print()
     print("=" * W)
-    return overall_pass
-
-
-if __name__ == "__main__":
-    passed = asyncio.run(main())
-    sys.exit(0 if passed else 1)
+    assert overall_pass, (
+        f"detection rate {overall*100:.1f}% < {DETECTION_THRESHOLD*100:.0f}% threshold "
+        f"({total_d}/{total_q} qualifying alerts detected)"
+    )

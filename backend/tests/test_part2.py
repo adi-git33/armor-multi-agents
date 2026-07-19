@@ -12,7 +12,6 @@ Run:  python test_part2.py
 """
 
 import asyncio
-import time
 
 from simulation.clock import SimClock
 from simulation.network import NetworkTopology
@@ -24,7 +23,7 @@ ATTACK_S  = 12
 RECOVERY_S = 6
 
 
-async def main() -> None:
+async def test_attacker_agents() -> None:
     print("=" * 70)
     print("  Part 2 Test  |  Attacker Agents")
     print(f"  Warmup {WARMUP_S}s  |  Attack {ATTACK_S}s  |  Recovery {RECOVERY_S}s")
@@ -148,7 +147,6 @@ async def main() -> None:
     # 6. DDoS peak pps is plausible
     baseline = topology.get("public-facing").baseline_mean
     expected_peak = baseline * ddos._multiplier
-    last_attack_pps = gen.get_stats("public-facing").current_pps
     check(
         "DDoS peak was at least 5x normal baseline",
         max(pf_during, default=0) >= 5.0,   # 5 sigma minimum during attack
@@ -159,7 +157,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 70)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import statistics
 import sys
 import time
 from pathlib import Path
@@ -44,49 +43,8 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
 
-from scenario_lib import (
-    run_scenario_1, run_scenario_2, run_scenario_3, run_scenario_6,
-    OFAT_SCENARIOS, SEEDS,
-)
+from scenario_lib import OFAT_SCENARIOS, SEEDS, ROWS, run_row_scenario
 from helpers import section
-
-RUNNERS = {1: run_scenario_1, 2: run_scenario_2, 3: run_scenario_3, 6: run_scenario_6}
-
-# ── 6-row OFAT sweep — each row differs from "Full baseline" by exactly one flag ──
-ROWS = [
-    ("Full baseline",     dict(naive_ladder=True,  naive_voting=True,  use_tia=False, naive_auction=True),  "— (reference floor)"),
-    ("+ proportionality", dict(naive_ladder=False, naive_voting=True,  use_tia=False, naive_auction=True),  "§4.1 marginal effect"),
-    ("+ voting",          dict(naive_ladder=True,  naive_voting=False, use_tia=False, naive_auction=True),  "§4.4 marginal effect"),
-    ("+ coalition",       dict(naive_ladder=True,  naive_voting=True,  use_tia=True,  naive_auction=True),  "§4.3 marginal effect"),
-    ("+ auction",         dict(naive_ladder=True,  naive_voting=True,  use_tia=False, naive_auction=False), "§4.2 marginal effect"),
-    ("Full advanced",     dict(naive_ladder=False, naive_voting=False, use_tia=True,  naive_auction=False), "— (reference ceiling)"),
-]
-
-
-def _mean_std(values: list[float]) -> tuple[float, float]:
-    if not values:
-        return 0.0, 0.0
-    mean = statistics.mean(values)
-    std  = statistics.stdev(values) if len(values) > 1 else 0.0
-    return mean, std
-
-
-async def _run_row_scenario(scenario_id: int, seeds: list[int], flags: dict) -> dict:
-    runner = RUNNERS[scenario_id]
-    sw_vals: list[float] = []
-    raw: dict[int, float] = {}
-    for seed in seeds:
-        kwargs = dict(flags, attach_peer_voter=True)
-        if scenario_id == 3:
-            result = await runner(gen_seed=seed, atk_seed_a=seed, atk_seed_b=seed + 1, atk_seed_c=seed + 2, **kwargs)
-        elif scenario_id == 2:
-            result = await runner(gen_seed=seed, atk_seed_a=seed, atk_seed_b=seed + 1, **kwargs)
-        else:
-            result = await runner(gen_seed=seed, atk_seed=seed, **kwargs)
-        sw_vals.append(result.sw)
-        raw[seed] = result.sw
-    mean, std = _mean_std(sw_vals)
-    return {"mean": mean, "std": std, "raw": raw}
 
 
 async def run(seeds: list[int] | None = None) -> dict:
@@ -100,7 +58,7 @@ async def run(seeds: list[int] | None = None) -> dict:
         row_result: dict[int, dict] = {}
         t0 = time.monotonic()
         for scenario_id in OFAT_SCENARIOS:
-            row_result[scenario_id] = await _run_row_scenario(scenario_id, seeds, flags)
+            row_result[scenario_id] = await run_row_scenario(scenario_id, seeds, flags)
         elapsed = time.monotonic() - t0
         table[row_name] = {"flags": flags, "isolates": isolates, "scenarios": row_result}
         print(f"  {row_name:<20} {isolates:<24}  "

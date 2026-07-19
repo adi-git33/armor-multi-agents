@@ -137,10 +137,6 @@ def aggregate_metrics(
     return merged
 
 
-def _bar_colors(entries: list[dict]) -> list[str]:
-    return [_PASS if e.get("passed", True) else _FAIL for e in entries]
-
-
 def _fig1_per_agent_utility(metrics: dict, out: Path) -> Path | None:
     agents = metrics.get("agent_utilities", {})
     if not agents:

@@ -21,14 +21,13 @@ Timeline
 """
 
 import asyncio
-import time
 
 from bus.message_bus import MessageBus
 from core.messages import Message, Performative, Topic
 from agents.rca import (
     ResponseCoordinatorAgent,
     MIN_CONFIDENCE, HIGH_CONFIDENCE, MIN_CORROBORATION,
-    RESOLUTION_COOLDOWN, VOTE_WINDOW,
+    VOTE_WINDOW,
 )
 from simulation.enforcement import EnforcementStub
 
@@ -59,7 +58,7 @@ def _threat(segment="public-facing", classification="DDOS",
     )
 
 
-async def main() -> None:
+async def test_response_coordinator_agent() -> None:
     print("=" * 65)
     print("  Part 6 Test  |  Response Coordinator Agent (RCA)")
     print("=" * 65)
@@ -353,9 +352,6 @@ async def main() -> None:
     scan_res = next(
         (r for r in scan_resolutions if r.get("classification") == "PORT_SCAN"), {}
     )
-    ddos_res = next(
-        (r for r in scan_resolutions if r.get("classification") == "DDOS"), {}
-    )
 
     check(
         "PORT_SCAN resolves with BLOCK_SOURCE_IP action",
@@ -381,7 +377,4 @@ async def main() -> None:
     print()
     print(f"  Overall: {'ALL PASS' if all_ok else 'SOME FAILURES'}")
     print("=" * 65)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert all_ok, "one or more checks failed — see output above"

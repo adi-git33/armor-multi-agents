@@ -41,7 +41,6 @@ Intention: _on_resolution → _allocate → _grant | _evict+_grant | _deny
 from __future__ import annotations
 import logging
 import time
-import uuid
 from dataclasses import dataclass, field
 
 from agents.base import BaseAgent
@@ -117,8 +116,8 @@ class ResourceAllocatorAgent(BaseAgent):
 
     async def start(self) -> None:
         await super().start()
-        self.bus.subscribe(Topic.RESOLUTION,    self._on_resolution)
-        self.bus.subscribe(Topic.RESOURCE_BIDS, self._on_resource_bid)
+        self.subscribe(Topic.RESOLUTION,    self._on_resolution)
+        self.subscribe(Topic.RESOURCE_BIDS, self._on_resource_bid)
         logger.info("[%s] ready  capacity=%s", self.agent_id, RESOURCE_CAPACITY)
 
     # ------------------------------------------------------------------
@@ -126,8 +125,6 @@ class ResourceAllocatorAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_resolution(self, msg: Message) -> None:
-        if not self._running:
-            return
         c = msg.content
         if c.get("outcome") != "EXECUTED":
             return
@@ -142,7 +139,7 @@ class ResourceAllocatorAgent(BaseAgent):
         resource_type = RESOURCE_MAP.get(action, "LOG")
 
         request = Allocation(
-            allocation_id      = str(uuid.uuid4())[:8],
+            allocation_id      = self._short_id(),
             incident_id        = c.get("incident_id", ""),
             segment            = c.get("segment", ""),
             action             = action,

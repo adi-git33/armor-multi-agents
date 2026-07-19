@@ -15,22 +15,12 @@ Expected runtime: ~15 s
 Usage
 -----
     cd backend
-    python -m tests.test_attackers
+    pytest tests/test_attackers.py
 """
 
 from __future__ import annotations
 import asyncio
-import io
-import sys
 import time
-from pathlib import Path
-
-# Windows: force UTF-8 so the output does not crash on Hebrew code pages
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from simulation.attackers import DDoSAttacker, PortScanner
 from simulation.clock import SimClock
@@ -524,7 +514,7 @@ async def run_section_e() -> tuple[int, int]:
 
 # ── Entry point ────────────────────────────────────────────────────────
 
-async def main() -> bool:
+async def test_attacker_behaviors() -> None:
     header("Attacker Agent Validation  |  DDoSAttacker + PortScanner")
     print(f"  Target segment : '{SEGMENT}'  (baseline 500 pps, std 75)")
     print(f"  Expected runtime: ~15 s")
@@ -564,9 +554,4 @@ async def main() -> bool:
     print(f"  Elapsed: {elapsed:.1f} s")
     sep()
 
-    return passed
-
-
-if __name__ == "__main__":
-    passed = asyncio.run(main())
-    sys.exit(0 if passed else 1)
+    assert passed, f"{total_p}/{total_t} checks passed — see section breakdown above"

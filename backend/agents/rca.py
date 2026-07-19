@@ -75,12 +75,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
 from agents.base import BaseAgent
+from agents._history import append_and_expire
 from bus.message_bus import MessageBus
 from core.messages import Message, Performative, Topic
 
@@ -188,9 +188,9 @@ class ResponseCoordinatorAgent(BaseAgent):
 
     async def start(self) -> None:
         await super().start()
-        self.bus.subscribe(Topic.THREAT_REPORTS, self._on_threat_report)
-        self.bus.subscribe(Topic.THREAT_INTEL,   self._on_threat_intel)
-        self.bus.subscribe(Topic.VOTES,          self._on_vote)
+        self.subscribe(Topic.THREAT_REPORTS, self._on_threat_report)
+        self.subscribe(Topic.THREAT_INTEL,   self._on_threat_intel)
+        self.subscribe(Topic.VOTES,          self._on_vote)
         logger.info("[%s] ready", self.agent_id)
 
     # ------------------------------------------------------------------
@@ -254,9 +254,6 @@ class ResponseCoordinatorAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_threat_report(self, msg: Message) -> None:
-        if not self._running:
-            return
-
         c   = msg.content
         seg = c.get("segment", "")
         clf = c.get("classification", "NOISE")
@@ -272,13 +269,9 @@ class ResponseCoordinatorAgent(BaseAgent):
             return
 
         # Update history
-        if seg not in self._history:
-            self._history[seg] = []
-        self._history[seg].append({"time": now, **c})
-        self._history[seg] = [
-            r for r in self._history[seg]
-            if now - r["time"] <= HISTORY_WINDOW
-        ]
+        self._history[seg] = append_and_expire(
+            self._history.get(seg, []), {"time": now, **c}, now, HISTORY_WINDOW
+        )
 
         await self._deliberate(seg, c, conf, now)
 
@@ -294,9 +287,6 @@ class ResponseCoordinatorAgent(BaseAgent):
         bypasses the escalation ladder outright and acts at the top tier
         immediately, same as a single CRITICAL_CONFIDENCE report.
         """
-        if not self._running:
-            return
-
         c   = msg.content
         seg = c.get("primary_segment", "")
         clf = c.get("classification", "")
@@ -329,7 +319,7 @@ class ResponseCoordinatorAgent(BaseAgent):
         }
 
         incident = Incident(
-            incident_id    = str(uuid.uuid4())[:8],
+            incident_id    = self._short_id(),
             segment        = seg,
             classification = clf,
             confidence     = conf,
@@ -373,7 +363,7 @@ class ResponseCoordinatorAgent(BaseAgent):
         action, level  = self._pick_action(seg, classification)
 
         incident = Incident(
-            incident_id    = str(uuid.uuid4())[:8],
+            incident_id    = self._short_id(),
             segment        = seg,
             classification = classification,
             confidence     = confidence,
@@ -596,9 +586,6 @@ class ResponseCoordinatorAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _on_vote(self, msg: Message) -> None:
-        if not self._running:
-            return
-
         c           = msg.content
         incident_id = c.get("incident_id", "")
         incident    = self._incident_log.get(incident_id)

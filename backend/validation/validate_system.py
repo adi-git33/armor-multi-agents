@@ -24,7 +24,7 @@ sys.path.insert(0, str(_HERE))
 
 from simulation.clock    import SimClock
 from simulation.network  import NetworkTopology
-from simulation.traffic  import TrafficGenerator, SAMPLE_RATE
+from simulation.traffic  import TrafficGenerator
 from simulation.attackers import DDoSAttacker, PortScanner
 from agents.tma  import TrafficMonitorAgent
 from agents.aca  import AnomalyClassifierAgent
@@ -34,6 +34,7 @@ from agents.tia  import ThreatIntelligenceAgent
 from bus.message_bus import MessageBus
 from core.messages   import Topic, Performative, Message
 from helpers import ValidationSuite, section
+from scenario_lib import measure_resource_overhead
 from system_availability import (
     TOTAL_TIME,
     run_system_availability_test,
@@ -93,7 +94,6 @@ async def run() -> ValidationSuite:
     atk_scan = PortScanner("ATK:scan",  "server",         gen, rng_seed=21)
     d_task   = asyncio.create_task(atk_ddos.launch(ATTACK_SEC))
     s_task   = asyncio.create_task(atk_scan.launch(ATTACK_SEC))
-    t_atk_start = time.monotonic()
     await asyncio.sleep(ATTACK_SEC + 1.5)
     await asyncio.gather(d_task, s_task, return_exceptions=True)
 
@@ -286,15 +286,7 @@ async def run() -> ValidationSuite:
     u_rca     = min(avail_val * (1.0 / max(mttr_r / 1000, 0.001)) * 0.90, 1.0)
 
     resource_eff = 0.85
-    cpu_pct = mem_pct = None
-    try:
-        import psutil
-        proc     = psutil.Process()
-        cpu_pct  = proc.cpu_percent(interval=0.2) / max(psutil.cpu_count(), 1)
-        mem_pct  = proc.memory_info().rss / psutil.virtual_memory().total
-        overhead = (cpu_pct / 100 + mem_pct) / 2
-    except ImportError:
-        overhead = 0.05
+    overhead, cpu_pct, mem_pct = measure_resource_overhead(interval=0.2)
     u_raa = resource_eff * (1 - overhead)
 
     u_tia = min(0.80 * 0.90 * (1.0 / 0.80), 1.0)

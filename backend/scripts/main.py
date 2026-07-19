@@ -10,6 +10,11 @@ Press Ctrl+C to stop.
 """
 
 import asyncio
+import sys
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
 
 from simulation.clock import SimClock
 from simulation.network import NetworkTopology
@@ -37,7 +42,6 @@ def _status(deviation: float) -> str:
 
 async def display_loop(gen: TrafficGenerator, topology: NetworkTopology) -> None:
     tick = 0
-    sample_totals: dict[str, int] = {sid: 0 for sid in SEG_ORDER}
 
     while True:
         await asyncio.sleep(DISPLAY_INTERVAL)

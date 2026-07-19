@@ -7,6 +7,12 @@ in the simulated network.
     python show_topology.py
 """
 
+import sys
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
+
 from simulation.network import NetworkTopology
 
 

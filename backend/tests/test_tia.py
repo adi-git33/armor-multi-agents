@@ -13,22 +13,12 @@ Expected runtime: ~65 s  (Section B1 performs a real 31 s wait)
 Usage
 -----
     cd backend
-    python -m tests.test_tia
+    pytest tests/test_tia.py
 """
 
 from __future__ import annotations
 import asyncio
-import io
-import sys
 import time
-from pathlib import Path
-
-# Windows: force UTF-8 so Unicode characters in output don't crash on Hebrew code pages
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from bus.message_bus import MessageBus
 from core.messages import Message, Performative, Topic
@@ -491,7 +481,7 @@ async def run_section_d() -> tuple[int, int]:
 
 # ── Entry point ────────────────────────────────────────────────────────
 
-async def main() -> bool:
+async def test_tia_patterns() -> None:
     header("TIA Validation  |  Threat Intelligence Agent Test Suite")
     print(
         f"  INTEL_WINDOW = {int(INTEL_WINDOW)} s   "
@@ -533,9 +523,4 @@ async def main() -> bool:
     print(f"  Elapsed: {elapsed:.1f} s")
     sep()
 
-    return passed
-
-
-if __name__ == "__main__":
-    passed = asyncio.run(main())
-    sys.exit(0 if passed else 1)
+    assert passed, f"{total_p}/{total_t} checks passed — see section breakdown above"

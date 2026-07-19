@@ -1,8 +1,9 @@
 """
 validate_baseline.py — Naive/Uncoordinated Baseline (BASELINE_VS_ADVANCED_VALIDATION_PLAN_V2 §5.1)
 ======================================================================================================
-Structural mirror of validate_scenarios.py: identical _make_system(seed),
-identical attacker classes/intensities/durations/seeds per scenario. The
+Structural mirror of validate_scenarios.py: identical build_system(seed)
+(scenario_lib.py), identical attacker classes/intensities/durations/seeds
+per scenario. The
 only difference is that every agent is constructed with all four
 baseline/ablation flags set to "naive":
 
@@ -44,20 +45,16 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
 
-from simulation.clock    import SimClock
-from simulation.network  import NetworkTopology
-from simulation.traffic  import TrafficGenerator
 from simulation.attackers import DDoSAttacker
 from agents.tma  import TrafficMonitorAgent
 from agents.aca  import AnomalyClassifierAgent
 from agents.rca  import ResponseCoordinatorAgent
 from agents.raa  import ResourceAllocatorAgent
-from bus.message_bus import MessageBus
 from core.messages   import Topic
 from helpers import ValidationSuite, section
 from scenario_lib import (
     run_scenario_1, run_scenario_2, run_scenario_3, run_scenario_6,
-    _peer_accept_voter, BASELINE_SCENARIOS,
+    _peer_accept_voter, BASELINE_SCENARIOS, build_system,
 )
 
 MIN_SW = 0.80
@@ -73,15 +70,6 @@ NAIVE_KW = dict(
 def _sw(u_tma, u_aca, u_rca, u_raa, u_tia) -> float:
     return (W["TMA"] * u_tma + W["ACA"] * u_aca + W["RCA"] * u_rca +
             W["RAA"] * u_raa + W["TIA"] * u_tia)
-
-
-async def _make_system(seed: int):
-    clock    = SimClock(speed=1.0)
-    topology = NetworkTopology()
-    bus      = MessageBus()
-    gen      = TrafficGenerator(topology, clock, rng_seed=seed)
-    await bus.start()
-    return bus, gen, topology
 
 
 async def run() -> ValidationSuite:
@@ -132,7 +120,7 @@ async def run() -> ValidationSuite:
     # ══════════════════════════════════════════════════════════════════
     section("SCENARIO 4  Zero-Day / Novel Attack Detection (control — unaffected)")
 
-    bus4, gen4, _ = await _make_system(seed=140)
+    bus4, gen4, _ = await build_system(seed=140)
     tma4 = TrafficMonitorAgent("TMA:b4", bus4, gen4)
     aca4 = AnomalyClassifierAgent("ACA:b4", bus4)
     await tma4.start(); await aca4.start()
@@ -167,7 +155,7 @@ async def run() -> ValidationSuite:
     # ══════════════════════════════════════════════════════════════════
     section("SCENARIO 5  Agent Failure & Resilience (naive RCA/RAA, no TIA)")
 
-    bus5, gen5, _ = await _make_system(seed=150)
+    bus5, gen5, _ = await build_system(seed=150)
     tma5 = TrafficMonitorAgent("TMA:b5", bus5, gen5)
     aca5 = AnomalyClassifierAgent("ACA:b5", bus5)
     rca5 = ResponseCoordinatorAgent("RCA:b5", bus5, naive_ladder=True, naive_voting=True)

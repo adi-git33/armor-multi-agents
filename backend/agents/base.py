@@ -7,15 +7,21 @@ Provides:
   - agent_id  (e.g. "TMA:1", "ACA:2")
   - message bus reference + publish() helper (auto-increments seq)
   - start() / stop() lifecycle hooks (override in subclass)
+  - subscribe() — bus subscription auto-guarded against post-stop() delivery
+  - _short_id() — short opaque id for incidents/allocations
 """
 
 from __future__ import annotations
 import logging
+import uuid
+from typing import Any, Awaitable, Callable
 
-from core.messages import Message, Performative, Topic
+from core.messages import Message, Performative
 from bus.message_bus import MessageBus
 
 logger = logging.getLogger(__name__)
+
+EventHandler = Callable[[Any], Awaitable[None]]
 
 
 class BaseAgent:
@@ -39,8 +45,22 @@ class BaseAgent:
         logger.debug("[%s] stopped", self.agent_id)
 
     # ------------------------------------------------------------------
-    # Communication helper
+    # Communication helpers
     # ------------------------------------------------------------------
+
+    def _guarded(self, handler: EventHandler) -> EventHandler:
+        """Wrap a handler so it silently no-ops once stop() has been
+        called, instead of every handler re-checking self._running."""
+        async def _wrapped(event: Any) -> None:
+            if not self._running:
+                return
+            await handler(event)
+        return _wrapped
+
+    def subscribe(self, topic: str, handler: EventHandler) -> None:
+        """Subscribe `handler` on the bus with the running-guard applied.
+        Call from within start(), after `await super().start()`."""
+        self.bus.subscribe(topic, self._guarded(handler))
 
     async def publish(
         self,
@@ -65,3 +85,11 @@ class BaseAgent:
             **kwargs,
         )
         await self.bus.publish(msg)
+
+    # ------------------------------------------------------------------
+    # Misc helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _short_id() -> str:
+        return str(uuid.uuid4())[:8]

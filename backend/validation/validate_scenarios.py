@@ -42,7 +42,7 @@ sys.path.insert(0, str(_HERE))
 from simulation.clock    import SimClock
 from simulation.network  import NetworkTopology
 from simulation.traffic  import TrafficGenerator
-from simulation.attackers import DDoSAttacker, PortScanner
+from simulation.attackers import DDoSAttacker
 from agents.tma  import TrafficMonitorAgent, ALERT_COOLDOWN
 from agents.aca  import AnomalyClassifierAgent
 from agents.rca  import ResponseCoordinatorAgent, VOTE_WINDOW

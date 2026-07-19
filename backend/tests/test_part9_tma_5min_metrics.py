@@ -13,16 +13,9 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from pathlib import Path
 import random
 import statistics
-import sys
 import time
-
-# Ensure backend/ is importable regardless of current working directory.
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
 from agents.tma import (
     ALERT_COOLDOWN,
@@ -1055,7 +1048,7 @@ def _render_report(test_a: dict, test_b: dict) -> None:
     )
 
 
-async def main() -> None:
+async def test_tma_5min_metrics() -> None:
     print("=" * 80)
     print("  Part 9 Test  |  TMA Validation Coverage (A/B/C/D)")
     print("=" * 80)
@@ -1084,7 +1077,3 @@ async def main() -> None:
         f"server_scan_alerts={test_d['server_scan_alerts']}, public_scan_alerts={test_d['public_scan_alerts']})"
     )
     print("=" * 80)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
