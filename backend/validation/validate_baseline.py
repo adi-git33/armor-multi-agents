@@ -31,7 +31,7 @@ Scenario coverage (BASELINE_SCENARIOS = 1,2,3,4,5,6):
   S3  auction behavior diverges (FCFS vs. priority+eviction)
   S6  naive_voting removes the vote wait entirely
   S4  detection-only control — should be near-identical to advanced
-  S5  agent-failure control — RCA/RAA naive, TIA omitted; noted separately,
+  S5  manual-agent-swap control — RCA/RAA naive, TIA omitted; noted separately,
       since backup-registration is a 5th mechanism not covered by these
       four flags
 
@@ -116,9 +116,9 @@ async def run() -> ValidationSuite:
                 True, observed=f"SW ≈ {r3.sw:.3f}", expected="report only")
 
     # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 4 — Zero-Day / Novel Attack Detection (detection-only control)
+    # SCENARIO 4 — Unsignatured Attack Detection (detection-only control)
     # ══════════════════════════════════════════════════════════════════
-    section("SCENARIO 4  Zero-Day / Novel Attack Detection (control — unaffected)")
+    section("SCENARIO 4  Unsignatured Attack Detection (control — unaffected)")
 
     bus4, gen4, _ = await build_system(seed=140)
     tma4 = TrafficMonitorAgent("TMA:b4", bus4, gen4)
@@ -151,9 +151,9 @@ async def run() -> ValidationSuite:
                 True, observed=f"SW ≈ {sw_s4:.3f}", expected="report only, ~= advanced S4")
 
     # ══════════════════════════════════════════════════════════════════
-    # SCENARIO 5 — Agent Failure & Resilience (RCA/RAA naive, TIA omitted)
+    # SCENARIO 5 — Manual Agent Swap (Harness Control) (RCA/RAA naive, TIA omitted)
     # ══════════════════════════════════════════════════════════════════
-    section("SCENARIO 5  Agent Failure & Resilience (naive RCA/RAA, no TIA)")
+    section("SCENARIO 5  Manual Agent Swap (Harness Control) (naive RCA/RAA, no TIA)")
 
     bus5, gen5, _ = await build_system(seed=150)
     tma5 = TrafficMonitorAgent("TMA:b5", bus5, gen5)
@@ -188,7 +188,7 @@ async def run() -> ValidationSuite:
                 len(s5_reports) > 0,
                 observed=f"{len(s5_reports)} reports; reassigned in {reassign_ms:.0f} ms",
                 expected="≥ 1 report, same as advanced mode")
-    suite.check("S5", "Social Welfare (naive RCA/RAA, resilience control)",
+    suite.check("S5", "Social Welfare (naive RCA/RAA, manual-swap control)",
                 True, observed=f"SW ≈ {sw_s5:.3f}", expected="report only")
 
     # ══════════════════════════════════════════════════════════════════

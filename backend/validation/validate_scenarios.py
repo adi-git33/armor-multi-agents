@@ -7,8 +7,8 @@ each against its documented success criteria.
   Scenario 1  Single-Segment DDoS Attack
   Scenario 2  Multi-Segment Coordinated Attack
   Scenario 3  Resource Contention Under Heavy Load
-  Scenario 4  Zero-Day / Novel Attack Detection
-  Scenario 5  Agent Failure & Resilience
+  Scenario 4  Unsignatured Attack Detection
+  Scenario 5  Manual Agent Swap (Harness Control)
   Scenario 6  Voting Protocol Validation
 
 Each scenario lives in its own `run_sN()` coroutine, independently
@@ -222,11 +222,11 @@ async def run_s3() -> ValidationSuite:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# SCENARIO 4 — Zero-Day / Novel Attack Detection (SRS §8.4)
+# SCENARIO 4 — Unsignatured Attack Detection (SRS §8.4)
 # ══════════════════════════════════════════════════════════════════════
 async def run_s4() -> ValidationSuite:
-    suite = ValidationSuite("Scenario 4 — Zero-Day / Novel Attack Detection (SRS §8.4)")
-    section("SCENARIO 4  Zero-Day / Novel Attack Detection")
+    suite = ValidationSuite("Scenario 4 — Unsignatured Attack Detection (SRS §8.4)")
+    section("SCENARIO 4  Unsignatured Attack Detection")
 
     bus4, gen4, _ = await _make_system(seed=140)
     tma4 = TrafficMonitorAgent("TMA:s4", bus4, gen4)
@@ -288,7 +288,7 @@ async def run_s4() -> ValidationSuite:
                 detect_ms < 2000,
                 observed=f"{detect_ms:.0f} ms", expected="< 500 ms",
                 note="4× tolerance for test-harness overhead")
-    suite.check("S4", "FPR < 10% during zero-day window",
+    suite.check("S4", "FPR < 10% during unsignatured-attack window",
                 zd_fpr < 0.10,
                 observed=f"{zd_fpr*100:.2f}%", expected="< 10%")
     sw_s4 = _sw(1.0 if novel_detected else 0.5, 0.90, 0.85, 0.85, 0.80)
@@ -300,7 +300,7 @@ async def run_s4() -> ValidationSuite:
         "social_welfare": {"S4": {"value": sw_s4, "target": MIN_SW, "passed": sw_s4 >= MIN_SW}},
         "attacker_utility": {
             "S4": {"value": evasion_s4_cont, "target": 0.75,
-                   "passed": evasion_s4_cont < 0.75, "label": "Evasion (novel/zero-day)"},
+                   "passed": evasion_s4_cont < 0.75, "label": "Evasion (unsignatured attack)"},
         },
     })
 
@@ -309,11 +309,11 @@ async def run_s4() -> ValidationSuite:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# SCENARIO 5 — Agent Failure & Resilience (SRS §8.5)
+# SCENARIO 5 — Manual Agent Swap (Harness Control) (SRS §8.5)
 # ══════════════════════════════════════════════════════════════════════
 async def run_s5() -> ValidationSuite:
-    suite = ValidationSuite("Scenario 5 — Agent Failure & Resilience (SRS §8.5)")
-    section("SCENARIO 5  Agent Failure & Resilience")
+    suite = ValidationSuite("Scenario 5 — Manual Agent Swap (Harness Control) (SRS §8.5)")
+    section("SCENARIO 5  Manual Agent Swap (Harness Control)")
 
     bus5, gen5, _ = await _make_system(seed=150)
     tma5 = TrafficMonitorAgent("TMA:s5", bus5, gen5)
@@ -391,7 +391,7 @@ async def run_s5() -> ValidationSuite:
         "social_welfare": {"S5": {"value": sw_s5, "target": MIN_SW, "passed": sw_s5 >= MIN_SW}},
         "attacker_utility": {
             "S5": {"value": evasion_s5_cont, "target": 0.50,
-                   "passed": evasion_s5_cont < 0.50, "label": "Evasion (failover)"},
+                   "passed": evasion_s5_cont < 0.50, "label": "Evasion (manual swap)"},
         },
     })
 

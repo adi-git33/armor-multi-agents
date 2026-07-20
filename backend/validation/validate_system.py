@@ -233,8 +233,10 @@ async def run() -> ValidationSuite:
                 expected="≥ 3 reports",
                 note="Full 5-incident test in validate_scenarios.py Scenario 3")
 
-    # ── FR-34: Agent failure reassignment within 2 s ─────────────────
-    section("FR-34  Agent failure: backup takes over within 2 seconds")
+    # ── FR-34: Manual agent swap within 2 s (harness-orchestrated —
+    # see the "failover" suite / validate_failover.py for the autonomous
+    # AgentSupervisor-driven test) ────────────────────────────────────
+    section("FR-34  Manual agent swap: backup takes over within 2 seconds (harness-orchestrated)")
     bus5, gen5, agents5, _ = _build_system(rng_seed=103)
     await bus5.start()
     for a in agents5.values():
@@ -269,7 +271,8 @@ async def run() -> ValidationSuite:
                 "Backup ACA registered within 2 seconds of failure",
                 reassign_ms < 2000,
                 observed=f"reassignment took {reassign_ms:.0f} ms",
-                expected="< 2000 ms")
+                expected="< 2000 ms",
+                note="harness-orchestrated swap, not autonomous system detection")
 
     # ── Social Welfare (SW) ≥ 0.80 ────────────────────────────────────
     section("Social Welfare (SW) ≥ 0.80  (SRS §7.2)")

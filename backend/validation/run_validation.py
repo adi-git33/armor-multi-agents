@@ -63,8 +63,8 @@ SUITES = {
     "s1":        ("validate_scenarios", "Scenario 1 — Single-Segment DDoS Attack", "run_s1"),
     "s2":        ("validate_scenarios", "Scenario 2 — Multi-Segment Coordinated Attack", "run_s2"),
     "s3":        ("validate_scenarios", "Scenario 3 — Resource Contention Under Heavy Load", "run_s3"),
-    "s4":        ("validate_scenarios", "Scenario 4 — Zero-Day / Novel Attack Detection", "run_s4"),
-    "s5":        ("validate_scenarios", "Scenario 5 — Agent Failure & Resilience", "run_s5"),
+    "s4":        ("validate_scenarios", "Scenario 4 — Unsignatured Attack Detection", "run_s4"),
+    "s5":        ("validate_scenarios", "Scenario 5 — Manual Agent Swap (Harness Control)", "run_s5"),
     "s6":        ("validate_scenarios", "Scenario 6 — Voting Protocol Validation", "run_s6"),
 }
 

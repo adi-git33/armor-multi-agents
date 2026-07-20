@@ -15,7 +15,7 @@ Derived checks (BDI Desires / Utility function U_TMA):
 
 SRS targets (§7.3):
   MTTR_alert  < 100 ms
-  FPR         < 8%   (classifier target) / < 10% (zero-day)
+  FPR         < 8%   (classifier target) / < 10% (S4 unsignatured-attack window)
   DR          > 90%
 
 Run standalone:

@@ -85,8 +85,8 @@ SUITE_META = {
     "s1":        {"title": "Single-Segment DDoS Attack", "est_sec": 8},
     "s2":        {"title": "Multi-Segment Coordinated Attack", "est_sec": 16},
     "s3":        {"title": "Resource Contention Under Heavy Load", "est_sec": 8},
-    "s4":        {"title": "Zero-Day / Novel Attack Detection", "est_sec": 8},
-    "s5":        {"title": "Agent Failure & Resilience", "est_sec": 7},
+    "s4":        {"title": "Unsignatured Attack Detection", "est_sec": 8},
+    "s5":        {"title": "Manual Agent Swap (Harness Control)", "est_sec": 7},
     "s6":        {"title": "Voting Protocol Validation", "est_sec": 16},
 }
 
