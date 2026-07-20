@@ -66,3 +66,21 @@ python validation/run_validation.py            # everything + chart export
 python validation/run_validation.py --quick    # fast subset
 python validation/run_validation.py --suite stress   # one suite (tma|aca|rca|tia|raa|system|stress|s1..s6)
 ```
+
+## retrain and compare models
+
+after running the dashboard, a feedback json file will be created.
+the current model can b e retrain with this feedback:
+
+*notice*: before retraining save a copy of the current model for later comperations.
+
+```bash
+cd backend
+python -m agents.aca_trainer --with-feedback
+```
+
+after the new model has been train, a comparation can be made by:
+
+```bash
+python -m agents.aca_compare <old_model.pkl> <new_model.pkl>
+```

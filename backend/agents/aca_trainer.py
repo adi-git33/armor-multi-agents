@@ -28,10 +28,16 @@ Per-alert labelling (not per-scenario):
 
 Run once before the ACA:
     python -m agents.aca_trainer
+
+Retrain folding in operator-confirmed feedback (see aca.py FEEDBACK_PATH —
+EXECUTED-outcome resolutions the live ACA has persisted since the last
+retrain):
+    python -m agents.aca_trainer --with-feedback
 """
 
 from __future__ import annotations
 import asyncio
+import json
 import pickle
 import sys
 import time
@@ -59,7 +65,8 @@ from simulation.attackers import DDoSAttacker, PortScanner
 from agents.tma import TrafficMonitorAgent
 from agents.aca_features import FEATURE_NAMES, extract_features
 
-MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "aca_model.pkl"
+MODEL_PATH    = Path(__file__).resolve().parent.parent / "models" / "aca_model.pkl"
+FEEDBACK_PATH = Path(__file__).resolve().parent.parent / "models" / "aca_feedback.jsonl"
 
 LABEL_NOISE     = 0
 LABEL_DDOS      = 1
@@ -242,10 +249,41 @@ async def _run_scenario(
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Operator feedback loading
+# ──────────────────────────────────────────────────────────────────────
+
+def _load_feedback_samples() -> tuple[list[list[float]], list[int]]:
+    """Read operator-confirmed samples persisted by aca.py (EXECUTED
+    outcomes only — see FEEDBACK_PATH). Missing file or unknown label
+    strings are tolerated so a partially-written line can't abort a
+    retrain."""
+    if not FEEDBACK_PATH.exists():
+        return [], []
+
+    label_to_idx = {name: i for i, name in enumerate(LABEL_NAMES)}
+    X: list[list[float]] = []
+    y: list[int]         = []
+    with open(FEEDBACK_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                label = label_to_idx[rec["label"]]
+                features = [float(v) for v in rec["features"]]
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                continue
+            X.append(features)
+            y.append(label)
+    return X, y
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Main entry point
 # ──────────────────────────────────────────────────────────────────────
 
-async def generate_and_train(n_seeds: int = 8) -> None:
+async def generate_and_train(n_seeds: int = 8, use_feedback: bool = False) -> None:
     print("=" * 65)
     print("  ACA Trainer  |  generating synthetic training data")
     print(f"  Scenarios: {len(SCENARIOS)}   Seeds per scenario: {n_seeds}")
@@ -272,6 +310,19 @@ async def generate_and_train(n_seeds: int = 8) -> None:
     print(f"    DDOS      = {sum(y == LABEL_DDOS)}")
     print(f"    PORT_SCAN = {sum(y == LABEL_PORT_SCAN)}")
     print(f"    Total     = {len(y)}")
+
+    if use_feedback:
+        fb_X, fb_y = _load_feedback_samples()
+        if fb_X:
+            print(f"\n  Folding in {len(fb_X)} operator-confirmed feedback "
+                  f"samples from {FEEDBACK_PATH.name}")
+            all_X.extend(fb_X)
+            all_y.extend(fb_y)
+            X = np.array(all_X, dtype=float)
+            y = np.array(all_y, dtype=int)
+        else:
+            print(f"\n  --with-feedback set but {FEEDBACK_PATH.name} "
+                  f"has no usable samples yet — training on synthetic data only")
 
     # ── Feature jitter ────────────────────────────────────────────────
     # Add Gaussian noise scaled to 10% of each feature's std.
@@ -347,4 +398,4 @@ async def generate_and_train(n_seeds: int = 8) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(generate_and_train())
+    asyncio.run(generate_and_train(use_feedback="--with-feedback" in sys.argv))
