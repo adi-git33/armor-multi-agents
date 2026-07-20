@@ -44,6 +44,10 @@ class BaseAgent:
         self._running = False
         logger.debug("[%s] stopped", self.agent_id)
 
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
     # ------------------------------------------------------------------
     # Communication helpers
     # ------------------------------------------------------------------

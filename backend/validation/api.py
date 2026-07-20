@@ -57,7 +57,8 @@ import helpers as _helpers_bare  # noqa: E402  (bare name — see module docstri
 
 router = APIRouter(prefix="/api/validation", tags=["validation"])
 
-_LAST_RUN_PATH = _HERE / "last_run.json"
+_RESULTS_DIR = _HERE / "results"
+_LAST_RUN_PATH = _RESULTS_DIR / "last_run.json"
 
 # The web UI groups suites into "agent" suites (run each agent's own
 # validate_*.py) and "scenario" suites (the six SRS §8 scenarios, each
@@ -66,7 +67,7 @@ _LAST_RUN_PATH = _HERE / "last_run.json"
 # compat (`--suite scenarios`) but isn't exposed as its own button — the
 # web "run all scenarios" action runs s1..s6 individually instead, which
 # streams live progress per-scenario instead of one 90s black box.
-AGENT_SUITE_KEYS = ["tma", "aca", "rca", "tia", "raa", "system", "stress"]
+AGENT_SUITE_KEYS = ["tma", "aca", "rca", "tia", "raa", "system", "stress", "failover"]
 SCENARIO_KEYS = ["s1", "s2", "s3", "s4", "s5", "s6"]
 
 # Rough expected durations (seconds) — purely informational, shown in the
@@ -80,6 +81,7 @@ SUITE_META = {
     "raa":       {"title": "Resource Allocator Agent", "est_sec": 30},
     "system":    {"title": "System-Level (FR-29..FR-34 + SW)", "est_sec": 45},
     "stress":    {"title": "High-Stress Load (Figure 6 source)", "est_sec": 30},
+    "failover":  {"title": "Agent Failover (Supervisor Resilience)", "est_sec": 10},
     "s1":        {"title": "Single-Segment DDoS Attack", "est_sec": 8},
     "s2":        {"title": "Multi-Segment Coordinated Attack", "est_sec": 16},
     "s3":        {"title": "Resource Contention Under Heavy Load", "est_sec": 8},
@@ -131,6 +133,7 @@ async def get_last_run() -> dict:
 
 def _save_last_run(payload: dict) -> None:
     try:
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         _LAST_RUN_PATH.write_text(json.dumps(payload, default=str), encoding="utf-8")
     except OSError:
         pass
@@ -292,7 +295,7 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
         })
         emit(None)
         await sender_task
-        # Deliberately not written to last_run.json — a cancelled run is
+        # Deliberately not written to results/last_run.json — a cancelled run is
         # partial by definition, so the next page load should keep showing
         # the last *completed* run rather than this truncated one.
         return
@@ -307,7 +310,7 @@ async def _run_and_stream(ws: WebSocket, target: str) -> None:
     # its own charts from this (see ValidationCharts/*), so it can add
     # tooltips, resize, and follow the app's own theme instead of shipping a
     # static image. degradation_panel_data()'s High-Stress column comes from
-    # the last measured validate_stress.py run (stress_results.json), so it's
+    # the last measured validate_stress.py run (results/stress_results.json), so it's
     # included every run regardless of which suites just executed.
     metrics = aggregate_metrics(suites_run)
     metrics["degradation"] = degradation_panel_data()

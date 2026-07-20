@@ -8,7 +8,7 @@ Verifies that:
   4. Both attackers log every action (FR-27)
   5. Non-targeted segments stay normal during the attack
 
-Run:  python test_part2.py
+Run:  python test_attacker_agents.py
 """
 
 import asyncio

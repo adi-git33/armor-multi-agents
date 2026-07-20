@@ -6,7 +6,7 @@ SRS contemplates — five simultaneous attacks across the topology, two of
 them stacked on the same segment — and MEASURES the six metrics shown in
 Figure 6 (Degradation Analysis). Until this suite existed the figure's
 "High Stress" column was a fixed illustrative constant; now every run
-writes stress_results.json and visualize_results.py picks the measured
+writes results/stress_results.json and visualize_results.py picks the measured
 values up for both the PNG figure and the frontend's live chart.
 
 Load profile (12 s, all concurrent):
@@ -47,7 +47,7 @@ from core.messages   import Topic
 from helpers import ValidationSuite, section
 from scenario_lib import priority_ok_label, _sw, measure_resource_overhead
 
-RESULTS_PATH = _HERE / "stress_results.json"
+RESULTS_PATH = _HERE / "results" / "stress_results.json"
 
 MIN_DR       = 0.90
 MAX_FPR      = 0.10
@@ -285,6 +285,7 @@ async def run() -> ValidationSuite:
         "grants": len(all_grants),
         "denials": len(all_denials),
     }
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     RESULTS_PATH.write_text(json.dumps(results, indent=2))
     print(f"\n  measured stress results written → {RESULTS_PATH.name}")
 

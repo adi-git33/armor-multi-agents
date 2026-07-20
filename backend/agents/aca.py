@@ -2,7 +2,7 @@
 Anomaly Classifier Agent  (SDD §4.3)
 ======================================
 Subscribes to TMA alerts, classifies them using a pre-trained
-DecisionTreeClassifier, and publishes threat reports.
+RandomForestClassifier, and publishes threat reports.
 
 Two-layer design
 -----------------
@@ -12,7 +12,7 @@ Layer 1 — rule filter:
     Fast path — no model call needed.
 
 Layer 2 — trained classifier:
-    Everything that passes the filter is scored by the decision tree.
+    Everything that passes the filter is scored by the random forest.
     Outputs: classification (NOISE / DDOS / PORT_SCAN) + confidence.
 
 Output published to threat-reports topic:

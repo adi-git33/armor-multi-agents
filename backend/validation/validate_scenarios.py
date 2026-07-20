@@ -51,7 +51,10 @@ from agents.tia  import ThreatIntelligenceAgent
 from bus.message_bus import MessageBus
 from core.messages   import Topic
 from helpers import ValidationSuite, section
-from scenario_lib import run_scenario_1, run_scenario_2, run_scenario_3, run_scenario_6
+from scenario_lib import (
+    run_scenario_1, run_scenario_2, run_scenario_3, run_scenario_6,
+    _peer_reject_voter,
+)
 
 W      = {"TMA": 0.20, "ACA": 0.30, "RCA": 0.25, "RAA": 0.10, "TIA": 0.15}
 MIN_SW = 0.80
@@ -320,13 +323,32 @@ async def run_s5() -> ValidationSuite:
     tia5 = ThreatIntelligenceAgent("TIA:s5", bus5)
     for a in [tma5, aca5, rca5, raa5, tia5]: await a.start()
 
-    s5_reports: list[dict] = []
-    async def s5_on_rep(msg): s5_reports.append(msg.content)
+    s5_reports:      list[dict]  = []
+    s5_report_times: list[float] = []
+    s5_resolutions:      list[dict]  = []
+    s5_resolution_times: list[float] = []
+
+    async def s5_on_rep(msg):
+        s5_reports.append(msg.content)
+        s5_report_times.append(time.monotonic())
+
+    async def s5_on_res(msg):
+        s5_resolutions.append(msg.content)
+        s5_resolution_times.append(time.monotonic())
+
     bus5.subscribe(Topic.THREAT_REPORTS, s5_on_rep)
+    bus5.subscribe(Topic.RESOLUTION,     s5_on_res)
 
     gen5_task = asyncio.create_task(gen5.run())
     await asyncio.sleep(1)
 
+    # NOTE: this harness manually stops the primary and instantly builds a
+    # replacement — there is no failure-detection/reassignment mechanism in
+    # the system itself (no supervisor/health-check anywhere in agents/ or
+    # sim_engine.py), so reassign_ms below measures the harness's own
+    # instantiation overhead, not autonomous recovery. See
+    # validate_failover.py for a suite that tests a real supervisor doing
+    # this detection+reassignment on its own.
     await aca5.stop()
     t_fail      = time.monotonic()
     aca5_backup = AnomalyClassifierAgent("ACA:s5-backup", bus5)
@@ -342,16 +364,24 @@ async def run_s5() -> ValidationSuite:
     gen5.stop(); gen5_task.cancel()
     await asyncio.gather(gen5_task, return_exceptions=True)
 
-    suite.check("S5", "Coverage reassigned to backup ACA within 2 seconds",
+    # Wall-clock gap between the first post-failure threat report and the
+    # first resolution — same convention as run_scenario_1's mttr_ms.
+    s5_mttr_ms = (
+        (s5_resolution_times[0] - s5_report_times[0]) * 1000
+        if (s5_report_times and s5_resolution_times) else None
+    )
+
+    suite.check("S5", "Manually-swapped backup ACA resumes coverage within budget",
                 reassign_ms < 2000,
-                observed=f"{reassign_ms:.0f} ms", expected="< 2000 ms")
+                observed=f"{reassign_ms:.0f} ms", expected="< 2000 ms",
+                note="harness-orchestrated swap, not autonomous system detection")
     suite.check("S5", "Backup ACA processes threats after primary failure",
                 len(s5_reports) > 0,
                 observed=f"{len(s5_reports)} reports", expected="≥ 1 report")
     suite.check("S5", "MTTR_Response < 1000 ms after agent failure",
-                len(s5_reports) > 0,
-                observed="backup maintained pipeline" if s5_reports else "no reports",
-                expected="< 1000 ms MTTR")
+                s5_mttr_ms is not None and s5_mttr_ms < 1000,
+                observed=f"{s5_mttr_ms:.0f} ms" if s5_mttr_ms is not None else "no resolution",
+                expected="< 1000 ms")
     sw_s5 = _sw(0.90, 0.90 if s5_reports else 0.5, 0.85, 0.85, 0.80)
     suite.check("S5", f"Social Welfare ≥ {MIN_SW}",
                 sw_s5 >= MIN_SW,
@@ -408,6 +438,49 @@ async def run_s6() -> ValidationSuite:
                    "passed": evasion_s6_cont < 0.15, "label": "Evasion (vote delay)"},
         },
     })
+
+    # ── Majority-reject path ────────────────────────────────────────────
+    # Everything above only ever exercises unanimous ACCEPT (RCA's own
+    # self-vote plus TIA/peer voters, none of which can ever reject) — the
+    # majority-vs-minority branch in RCA._resolve() (accepts > rejects ->
+    # EXECUTED, else -> REJECTED) was never actually tested. Run a second,
+    # independent mini-scenario with a reject-voting peer attached instead,
+    # producing a 1-accept/1-reject tie, which _resolve() treats as failing
+    # the majority and should REJECT.
+    bus6r, gen6r, _ = await _make_system(seed=161)
+    tma6r = TrafficMonitorAgent("TMA:s6r", bus6r, gen6r)
+    aca6r = AnomalyClassifierAgent("ACA:s6r", bus6r)
+    rca6r = ResponseCoordinatorAgent("RCA:s6r", bus6r)
+    raa6r = ResourceAllocatorAgent("RAA:s6r", bus6r)
+    for a in [tma6r, aca6r, rca6r, raa6r]:
+        await a.start()
+    await _peer_reject_voter(bus6r)
+
+    s6r_resolutions: list[dict] = []
+    async def s6r_on_res(msg): s6r_resolutions.append(msg.content)
+    bus6r.subscribe(Topic.RESOLUTION, s6r_on_res)
+
+    gen6r_task = asyncio.create_task(gen6r.run())
+    await asyncio.sleep(1)
+    atk6r      = DDoSAttacker("ATK:s6r", "public-facing", gen6r, intensity_multiplier=15.0, rng_seed=49)
+    atk6r_task = asyncio.create_task(atk6r.launch(12))
+    await asyncio.sleep(12 + 1.0 + VOTE_WINDOW)
+    await asyncio.gather(atk6r_task, return_exceptions=True)
+    gen6r.stop(); gen6r_task.cancel()
+    await asyncio.gather(gen6r_task, return_exceptions=True)
+
+    # RCA's REJECTED-outcome resolution (agents/rca.py's _resolve() "else"
+    # branch) doesn't carry an "action" field — only "votes_reject" reliably
+    # marks a resolution as having gone through the coalition vote at all.
+    voted_resolutions = [r for r in s6r_resolutions if r.get("votes_reject", 0) > 0]
+    reject_ok = bool(voted_resolutions) and all(
+        r.get("outcome") == "REJECTED" for r in voted_resolutions
+    )
+    suite.check("S6", "Majority-reject vote (1 accept vs 1 reject) yields REJECTED, not executed",
+                reject_ok,
+                observed=f"{[r.get('outcome') for r in voted_resolutions]}"
+                         if voted_resolutions else "no voted resolution",
+                expected="REJECTED")
 
     suite.print_results()
     return suite

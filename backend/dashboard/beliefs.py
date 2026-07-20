@@ -30,7 +30,7 @@ def build_beliefs(aid: str, atype: str, gen, m: dict, sc) -> list[dict]:
 
     elif atype == "ACA":
         beliefs = [
-            {"k": "classification_model", "v": "DecisionTree (98 % acc)", "vColor": B},
+            {"k": "classification_model", "v": "RandomForest (94 % acc)", "vColor": B},
             {"k": "false_positive_rate",  "v": f"{m['fpr']:.1%}",
              "vColor": G if m["fpr"] < 0.08 else R},
             {"k": "threats_classified",   "v": str(sc.tp),

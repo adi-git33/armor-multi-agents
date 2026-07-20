@@ -1,0 +1,17 @@
+{
+  "dr": 1.0,
+  "fpr": 0.0,
+  "mttr_ms": 26.0,
+  "sw": 0.9546,
+  "overhead": 0.0053,
+  "auction_ok": 1.0,
+  "attacks": 5,
+  "confusion": {
+    "tp": 13,
+    "fp": 0,
+    "fn": 1,
+    "tn": 6
+  },
+  "grants": 5,
+  "denials": 1
+}

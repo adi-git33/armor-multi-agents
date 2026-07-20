@@ -28,7 +28,7 @@ Usage:
     cd backend && python validation/validate_ablation.py --seeds 2 --quick   # smoke test
 
 Output:
-    validation/ablation_ofat.json  — mean±std per scenario per row + raw per-seed values
+    validation/results/ablation_ofat.json  — mean±std per scenario per row + raw per-seed values
     printed §3.2-style table
 """
 from __future__ import annotations
@@ -72,7 +72,8 @@ async def run(seeds: list[int] | None = None) -> dict:
         "rows": table,
     }
 
-    out_path = _HERE / "ablation_ofat.json"
+    out_path = _HERE / "results" / "ablation_ofat.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(output, indent=2, default=str))
     print(f"\n  wrote {out_path}")
 

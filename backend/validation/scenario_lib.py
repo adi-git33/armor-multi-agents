@@ -87,6 +87,26 @@ async def _peer_accept_voter(bus: MessageBus, agent_id: str = "PEER:voter") -> N
     bus.subscribe(Topic.COALITION, _on_cfp)
 
 
+async def _peer_reject_voter(bus: MessageBus, agent_id: str = "PEER:reject-voter") -> None:
+    """
+    2nd-voter stub that always REJECTs — the counterpart to
+    _peer_accept_voter(), used to exercise RCA's majority-vs-minority branch
+    in _resolve() (accepts > rejects -> EXECUTED, else -> REJECTED), which
+    nothing else in the codebase ever tests: every other voter (TIA, RCA's
+    own self-vote, _peer_accept_voter) always votes ACCEPT. Combined with
+    RCA's self-vote, this produces a 1-accept/1-reject tie, which is
+    already strictly-greater-fails -> REJECTED.
+    """
+    async def _on_cfp(msg: Message) -> None:
+        await bus.publish(Message(
+            performative = Performative.REJECT,
+            sender       = agent_id,
+            topic        = Topic.VOTES,
+            content      = {"incident_id": msg.content.get("incident_id", "")},
+        ))
+    bus.subscribe(Topic.COALITION, _on_cfp)
+
+
 def measure_resource_overhead(
     interval: float = 0.5,
 ) -> tuple[float, float | None, float | None]:
@@ -251,8 +271,16 @@ async def run_scenario_2(
     # CFP) — and that second report can't arrive before TMA's own 5s
     # ALERT_COOLDOWN elapses. A 4s attack physically cannot produce it;
     # 12s reliably does (verified empirically against this exact model).
+    #
+    # Both attackers are DDoS (not DDoS + PortScanner on two unrelated
+    # segments, as this used to be): DDOS classified on >=2 segments within
+    # TIA's 30s COORDINATED_DDOS_WINDOW is what actually makes this a
+    # *coordinated* attack — TIA's pattern needs both segments hit with the
+    # same attack type. Two unrelated attack types on two segments could
+    # never trigger TIA's correlation at all, so "coordinated" was never
+    # really being tested.
     atk_a = DDoSAttacker("ATK:s2a", "public-facing", gen, intensity_multiplier=10.0, rng_seed=atk_seed_a)
-    atk_b = PortScanner("ATK:s2b",  "internal",       gen, rng_seed=atk_seed_b)
+    atk_b = DDoSAttacker("ATK:s2b", "internal",       gen, intensity_multiplier=10.0, rng_seed=atk_seed_b)
     t0    = time.monotonic()
     ta    = asyncio.create_task(atk_a.launch(12))
     tb    = asyncio.create_task(atk_b.launch(12))

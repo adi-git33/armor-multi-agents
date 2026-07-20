@@ -373,7 +373,7 @@ def _fig5_resource_utilization(metrics: dict, out: Path) -> Path | None:
 #
 # Baseline is the standard S3 scenario result (fixed). The High-Stress column
 # is MEASURED: validate_stress.py runs the five-attack concurrent-load test
-# and writes stress_results.json; degradation_panels() below substitutes those
+# and writes results/stress_results.json; degradation_panels() below substitutes those
 # measured values in. The stress numbers here are only the pre-measurement
 # illustrative fallback, used when no stress run has ever been recorded.
 # Single source of truth for both the PNG figure (CLI/report export) and the
@@ -393,9 +393,9 @@ DEGRADATION_PANELS = [
      1.000, 0.000, 1.00, True,  1.30, "yn",  "required: correct"),
 ]
 
-_STRESS_RESULTS_PATH = Path(__file__).resolve().parent / "stress_results.json"
+_STRESS_RESULTS_PATH = Path(__file__).resolve().parent / "results" / "stress_results.json"
 
-# DEGRADATION_PANELS title → stress_results.json key (validate_stress.py)
+# DEGRADATION_PANELS title → results/stress_results.json key (validate_stress.py)
 _STRESS_KEY_BY_TITLE = {
     "Detection Rate":            "dr",
     "Alert False Positive Rate": "fpr",
