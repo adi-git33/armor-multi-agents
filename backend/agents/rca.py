@@ -554,7 +554,7 @@ class ResponseCoordinatorAgent(BaseAgent):
         # Cast RCA's own vote immediately
         incident.votes_accept += 1
 
-        # Publish CALL_FOR_PROPOSAL so future agents (TIA, RAA) can vote
+        # Publish CALL_FOR_PROPOSAL so coalition members (TIA, RAA) can vote
         await self.publish(
             topic        = Topic.COALITION,
             performative = Performative.CALL_FOR_PROPOSAL,

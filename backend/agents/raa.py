@@ -24,18 +24,27 @@ RAA also applies simulated enforcement: it maintains blocked_ips and
 quarantined_segments sets, making EnforcementStub unnecessary once RAA
 is in the system.
 
+RAA also votes on RCA's coalition CFPs (see _on_cfp): it forecasts
+whether it could actually honor the proposed action against current
+capacity using the CFP's confidence as a stand-in bid, and REJECTs
+proposals it would end up denying anyway.
+
 Publications
 ------------
 resource-grants topic:
   INFORM   → resource granted
   REJECT   → incoming request denied (outbid by existing pool)
   FAILURE  → existing allocation evicted (outbid by incoming)
+votes topic:
+  ACCEPT   → capacity forecast supports the proposal
+  REJECT   → capacity forecast says the proposal would be denied/outbid
 
 BDI roles
 ----------
 Beliefs  : _allocations per resource type, current bid landscape
 Desires  : maximise threat response quality within resource limits
 Intention: _on_resolution → _allocate → _grant | _evict+_grant | _deny
+           _on_cfp        → forecast capacity → vote ACCEPT | REJECT
 """
 
 from __future__ import annotations
@@ -118,6 +127,7 @@ class ResourceAllocatorAgent(BaseAgent):
         await super().start()
         self.subscribe(Topic.RESOLUTION,    self._on_resolution)
         self.subscribe(Topic.RESOURCE_BIDS, self._on_resource_bid)
+        self.subscribe(Topic.COALITION,     self._on_cfp)
         logger.info("[%s] ready  capacity=%s", self.agent_id, RESOURCE_CAPACITY)
 
     # ------------------------------------------------------------------
@@ -185,6 +195,66 @@ class ResourceAllocatorAgent(BaseAgent):
                 ),
                 weakest_existing=weakest.bid_value,
             )
+
+    # ------------------------------------------------------------------
+    # Coalition voting — capacity forecast
+    # ------------------------------------------------------------------
+
+    async def _on_cfp(self, msg: Message) -> None:
+        """
+        Vote on RCA's CALL_FOR_PROPOSAL using the same capacity/bid logic
+        as _allocate() (including the naive_auction ablation flag), so the
+        vote reflects whether RAA would actually honor the resource
+        request if the coalition approves it. Uses the CFP's own
+        confidence as a stand-in bid_value (the real vote ratio isn't
+        known yet — that's exactly what the vote is deciding).
+        """
+        if msg.performative != Performative.CALL_FOR_PROPOSAL:
+            return
+
+        c             = msg.content
+        incident_id   = c.get("incident_id", "")
+        action        = c.get("proposed_action", "")
+        confidence    = float(c.get("confidence", 0.0))
+        resource_type = RESOURCE_MAP.get(action, "LOG")
+        capacity      = RESOURCE_CAPACITY[resource_type]
+        current       = self._allocations[resource_type]
+
+        if len(current) < capacity:
+            vote   = Performative.ACCEPT
+            reason = f"RAA: {resource_type} has free capacity ({len(current)}/{capacity})"
+        elif self.naive_auction:
+            vote   = Performative.REJECT
+            reason = (
+                f"RAA: {resource_type} at capacity ({len(current)}/{capacity}); "
+                f"naive FCFS, no eviction — would be denied"
+            )
+        else:
+            weakest = min(current, key=lambda a: a.bid_value)
+            if confidence > weakest.bid_value:
+                vote   = Performative.ACCEPT
+                reason = (
+                    f"RAA: {resource_type} at capacity ({len(current)}/{capacity}) but "
+                    f"proposal confidence {confidence:.2f} > weakest existing bid "
+                    f"{weakest.bid_value:.2f} — would win eviction"
+                )
+            else:
+                vote   = Performative.REJECT
+                reason = (
+                    f"RAA: {resource_type} at capacity ({len(current)}/{capacity}) and "
+                    f"proposal confidence {confidence:.2f} <= weakest existing bid "
+                    f"{weakest.bid_value:.2f} — would be denied"
+                )
+
+        await self.publish(
+            topic        = Topic.VOTES,
+            performative = vote,
+            content      = {"incident_id": incident_id, "reason": reason},
+        )
+        logger.info(
+            "[%s] VOTE %s  incident=%s  resource=%s  reason=%s",
+            self.agent_id, vote.value, incident_id, resource_type, reason,
+        )
 
     # ------------------------------------------------------------------
     # Grant

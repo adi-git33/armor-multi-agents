@@ -313,7 +313,9 @@ Both patterns have a 30 s cooldown to prevent repeated publications for the same
 ### Coalition voting
 TIA subscribes to `coalition`. When RCA publishes a CFP, TIA:
 1. Looks up its history for the incident's segment
-2. Votes ACCEPT (always — no contradicting-evidence logic yet)
+2. Votes ACCEPT if it has at least one recent report on file for that
+   segment (corroboration); REJECT if it has none (no independent
+   evidence — contradicting-evidence logic beyond this remains future work)
 3. Includes `intel_count` in the vote so RCA can see the quality of corroboration
 
 **Test:** `pytest tests/test_tia_integration.py` — 8/8 PASS
@@ -361,6 +363,9 @@ High confidence + unanimous vote = high bid = priority access.
 
 ### Enforcement state
 RAA maintains `blocked_ips: set[str]` and `quarantined_segments: set[str]`. These represent what the enforcement layer *would* apply to a real firewall or VLAN controller. Wiring to an actual enforcement API requires only changing the `_enforce()` method — all agent logic above it stays the same.
+
+### Coalition voting
+RAA also subscribes to `coalition` and votes on RCA's CFPs (`_on_cfp`). It forecasts whether it could actually honor the proposed action: same capacity/weakest-bid comparison as `_allocate()`, using the CFP's `confidence` as a stand-in bid (the real vote ratio isn't known until the vote resolves). ACCEPT if capacity is free or the proposal would win an eviction; REJECT if it would be denied outright. This means RAA votes with foresight into resource contention rather than rubber-stamping every proposal.
 
 **Test:** `pytest tests/test_raa.py` — 8/8 PASS
 

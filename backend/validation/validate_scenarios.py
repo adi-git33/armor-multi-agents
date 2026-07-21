@@ -447,12 +447,18 @@ async def run_s6() -> ValidationSuite:
     # independent mini-scenario with a reject-voting peer attached instead,
     # producing a 1-accept/1-reject tie, which _resolve() treats as failing
     # the majority and should REJECT.
+    #
+    # RAA is deliberately NOT constructed here: RAA now also votes on CFPs
+    # (capacity-forecast REJECT/ACCEPT), and with fresh/empty pools it would
+    # always ACCEPT, turning this controlled 1-accept/1-reject tie into a
+    # 2-1 majority ACCEPT. RAA isn't needed for this check anyway — a
+    # REJECTED resolution never reaches RAA's _on_resolution (it early-
+    # returns on any outcome other than EXECUTED).
     bus6r, gen6r, _ = await _make_system(seed=161)
     tma6r = TrafficMonitorAgent("TMA:s6r", bus6r, gen6r)
     aca6r = AnomalyClassifierAgent("ACA:s6r", bus6r)
     rca6r = ResponseCoordinatorAgent("RCA:s6r", bus6r)
-    raa6r = ResourceAllocatorAgent("RAA:s6r", bus6r)
-    for a in [tma6r, aca6r, rca6r, raa6r]:
+    for a in [tma6r, aca6r, rca6r]:
         await a.start()
     await _peer_reject_voter(bus6r)
 

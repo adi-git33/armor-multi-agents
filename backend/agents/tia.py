@@ -16,8 +16,10 @@ Responsibilities
 3. Publish to threat-intel when a pattern is confirmed.
    The confidence carried in threat-intel is higher than any single
    report, because TIA has cross-corroborated the evidence.
-4. Subscribe to coalition (CFPs from RCA) and vote ACCEPT / REJECT based
-   on whether the intel database supports or contradicts the proposal.
+4. Subscribe to coalition (CFPs from RCA) and vote ACCEPT / REJECT:
+   ACCEPT if TIA's own history has at least one recent report for the
+   proposal's segment (corroboration), REJECT if TIA has no independent
+   evidence for it at all.
 
 BDI roles
 ----------
@@ -228,14 +230,19 @@ class ThreatIntelligenceAgent(BaseAgent):
             if now - r["time"] <= INTEL_WINDOW
         )
 
-        # ACCEPT unless TIA has specific reason to doubt (none in current impl).
-        # Future: compare proposed_action against known safe IP lists, etc.
-        vote   = Performative.ACCEPT
-        reason = (
-            f"TIA corroborates: {intel_count} report(s) on '{segment}'"
-            if intel_count > 0
-            else "TIA: no contradicting intel, cooperating"
-        )
+        # ACCEPT only when TIA's own history corroborates the segment — a
+        # proposal TIA has no independent evidence for gets REJECTed rather
+        # than rubber-stamped. (Contradicting-evidence logic — e.g. comparing
+        # proposed_action against known safe IP lists — remains future work.)
+        if intel_count > 0:
+            vote   = Performative.ACCEPT
+            reason = f"TIA corroborates: {intel_count} report(s) on '{segment}'"
+        else:
+            vote   = Performative.REJECT
+            reason = (
+                f"TIA: no corroborating reports on '{segment}' in the last "
+                f"{INTEL_WINDOW:.0f}s"
+            )
 
         await self.publish(
             topic        = Topic.VOTES,

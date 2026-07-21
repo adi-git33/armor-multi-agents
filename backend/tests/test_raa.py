@@ -10,11 +10,14 @@ Checks:
   6.  4th request with LOWER bid than all existing -> denied
   7.  QUARANTINE_SEGMENT resolution -> granted from QUARANTINE pool (not FIREWALL)
   8.  LOG_ONLY resolution -> always granted, does not consume FIREWALL capacity
+  9.  Coalition CFP with free capacity -> RAA votes ACCEPT
+  10. Coalition CFP against a full pool -> RAA votes REJECT (would be denied) or
+      ACCEPT (would win eviction), matching the same bid comparison as _allocate
 
 Bid value is derived implicitly:
     bid = confidence × (votes_accept / total_votes)
 
-All injected messages are crafted resolution messages (as RCA would publish).
+All injected messages are crafted resolution/CFP messages (as RCA would publish).
 No traffic generator or full agent stack needed.
 """
 
@@ -61,6 +64,22 @@ def _resolution(
             "decided_by":         "RCA:sim",
             "duration_ms":        2100,
             "enforcement_target": enforcement_target or {},
+        },
+    )
+
+
+def _cfp(incident_id: str, action: str, confidence: float, segment: str = "vote-seg") -> Message:
+    return Message(
+        performative = Performative.CALL_FOR_PROPOSAL,
+        sender       = "RCA:sim",
+        topic        = Topic.COALITION,
+        content      = {
+            "incident_id":     incident_id,
+            "segment":         segment,
+            "classification":  "DDOS",
+            "proposed_action": action,
+            "confidence":      confidence,
+            "deadline_secs":   0.3,
         },
     )
 
@@ -322,6 +341,62 @@ async def test_resource_allocator_agent() -> None:
         f"log_granted={bool(log_grant)}  "
         f"resource_type='{log_grant.get('resource_type')}'  "
         f"firewall_used={raa.used_capacity('FIREWALL')}",
+    )
+
+    await raa.stop()
+    await bus.stop()
+
+    # ── 9-10: coalition voting on capacity forecast ────────────────────
+    print("\n  -- Checks 9-10: RAA votes on coalition CFPs based on capacity forecast --")
+    bus = MessageBus()
+    raa = ResourceAllocatorAgent("RAA:6", bus)
+
+    votes9: list[dict] = []
+    async def on_vote9(msg):
+        votes9.append({**msg.content, "performative": msg.performative})
+
+    await bus.start()
+    await raa.start()
+    bus.subscribe(Topic.VOTES, on_vote9)
+
+    # Free QUARANTINE capacity -> ACCEPT
+    await bus.publish(_cfp("VOTE-1", "QUARANTINE_SEGMENT", confidence=0.80))
+    await asyncio.sleep(0.3)
+
+    v1 = next((v for v in votes9 if v.get("incident_id") == "VOTE-1"), None)
+    check(
+        "RAA votes ACCEPT on CFP when the resource pool has free capacity",
+        v1 is not None and v1.get("performative") == Performative.ACCEPT,
+        f"vote = {v1}",
+    )
+
+    # Fill QUARANTINE capacity with high-bid grants
+    for i in range(RESOURCE_CAPACITY["QUARANTINE"]):
+        await bus.publish(_resolution(
+            segment    = f"qseg-{i}",
+            action     = "QUARANTINE_SEGMENT",
+            confidence = 0.92,
+        ))
+    await asyncio.sleep(0.2)
+
+    # Low-confidence CFP against a full pool -> would be denied -> REJECT
+    await bus.publish(_cfp("VOTE-2", "QUARANTINE_SEGMENT", confidence=0.60))
+    await asyncio.sleep(0.3)
+    v2 = next((v for v in votes9 if v.get("incident_id") == "VOTE-2"), None)
+    check(
+        "RAA votes REJECT on CFP when pool is full and proposal would be denied",
+        v2 is not None and v2.get("performative") == Performative.REJECT,
+        f"vote = {v2}",
+    )
+
+    # High-confidence CFP against a full pool -> would win eviction -> ACCEPT
+    await bus.publish(_cfp("VOTE-3", "QUARANTINE_SEGMENT", confidence=0.99))
+    await asyncio.sleep(0.3)
+    v3 = next((v for v in votes9 if v.get("incident_id") == "VOTE-3"), None)
+    check(
+        "RAA votes ACCEPT on CFP when pool is full but proposal would win eviction",
+        v3 is not None and v3.get("performative") == Performative.ACCEPT,
+        f"vote = {v3}",
     )
 
     await raa.stop()

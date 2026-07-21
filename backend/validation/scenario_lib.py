@@ -91,11 +91,14 @@ async def _peer_reject_voter(bus: MessageBus, agent_id: str = "PEER:reject-voter
     """
     2nd-voter stub that always REJECTs — the counterpart to
     _peer_accept_voter(), used to exercise RCA's majority-vs-minority branch
-    in _resolve() (accepts > rejects -> EXECUTED, else -> REJECTED), which
-    nothing else in the codebase ever tests: every other voter (TIA, RCA's
-    own self-vote, _peer_accept_voter) always votes ACCEPT. Combined with
-    RCA's self-vote, this produces a 1-accept/1-reject tie, which is
-    already strictly-greater-fails -> REJECTED.
+    in _resolve() (accepts > rejects -> EXECUTED, else -> REJECTED). TIA and
+    RAA can now cast real REJECT votes too (TIA: no corroborating history;
+    RAA: capacity forecast says the proposal would be denied/outbid), but in
+    a controlled scenario with fresh state they reliably ACCEPT, so callers
+    that want a deterministic 1-accept/1-reject tie against RCA's self-vote
+    should build the mini-system with only RCA (+ this stub) voting — see
+    validate_scenarios.py's majority-reject check, which deliberately omits
+    RAA for exactly this reason.
     """
     async def _on_cfp(msg: Message) -> None:
         await bus.publish(Message(

@@ -4,7 +4,7 @@ Part 7 Test  |  Threat Intelligence Agent (TIA)
 Checks:
   1.  TIA detects MULTI_SEGMENT_SCAN — same src_ip on two different segments
   2.  Threat-intel message has all required fields
-  3.  TIA auto-votes ACCEPT on a coalition CFP from RCA
+  3.  TIA votes ACCEPT on a coalition CFP from RCA when it has corroborating history
   4.  TIA + RCA end-to-end: multi-segment scan escalates to resolution
   5.  Resolution enforcement_target carries the correct src_ip
   6.  TIA detects COORDINATED_DDOS — DDOS on two different segments
@@ -158,7 +158,7 @@ async def test_threat_intelligence_agent() -> None:
     await asyncio.sleep(0.3)
 
     check(
-        "TIA auto-votes ACCEPT on coalition CFP",
+        "TIA votes ACCEPT on coalition CFP (has corroborating history for seg-alpha)",
         len(vote_perfs) >= 1 and vote_perfs[0] == Performative.ACCEPT,
         f"votes received: {len(vote_perfs)}  "
         f"performative: {vote_perfs[0].value if vote_perfs else 'none'}",

@@ -412,7 +412,8 @@ async def run_section_c(
 
 async def run_section_d() -> tuple[int, int]:
     """
-    Verifies TIA always votes ACCEPT, that intel_count reflects the
+    Verifies TIA votes ACCEPT when it has corroborating history for the
+    segment and REJECT when it has none, that intel_count reflects the
     actual history depth for a segment, and that the correct incident_id
     is echoed back in the vote.
     """
@@ -423,7 +424,7 @@ async def run_section_d() -> tuple[int, int]:
     votes: list[dict] = []
 
     async def on_vote(msg: Message) -> None:
-        votes.append(msg.content.copy())
+        votes.append({**msg.content, "performative": msg.performative})
 
     bus.subscribe(Topic.VOTES, on_vote)
 
@@ -439,7 +440,9 @@ async def run_section_d() -> tuple[int, int]:
     vote1 = next((v for v in votes if v.get("incident_id") == "INC-001"), None)
     results.append(check(
         "D1  CFP on segment with intel history -> ACCEPT + intel_count > 0",
-        vote1 is not None and vote1.get("intel_count", 0) > 0,
+        vote1 is not None
+        and vote1.get("performative") == Performative.ACCEPT
+        and vote1.get("intel_count", 0) > 0,
         f"vote = {vote1}",
     ))
 
@@ -448,8 +451,10 @@ async def run_section_d() -> tuple[int, int]:
     await asyncio.sleep(0.4)
     vote2 = next((v for v in votes if v.get("incident_id") == "INC-002"), None)
     results.append(check(
-        "D2  CFP on segment with no history -> ACCEPT + intel_count == 0",
-        vote2 is not None and vote2.get("intel_count", 0) == 0,
+        "D2  CFP on segment with no history -> REJECT + intel_count == 0",
+        vote2 is not None
+        and vote2.get("performative") == Performative.REJECT
+        and vote2.get("intel_count", 0) == 0,
         f"vote = {vote2}",
     ))
 

@@ -36,8 +36,8 @@ class Topic:
     THREAT_INTEL    = "threat-intel"     # TIA, ACA -> ACA, RCA, RAA
     RESOURCE_BIDS   = "resource-bids"    # TMA, ACA, RCA -> RAA
     RESOURCE_GRANTS = "resource-grants"  # RAA  -> all
-    COALITION       = "coalition"        # TIA  -> ACA, RCA, RAA
-    VOTES           = "votes"            # RCA  -> coalition members
+    COALITION       = "coalition"        # RCA  -> TIA, RAA (CFPs)
+    VOTES           = "votes"            # TIA, RAA -> RCA
     RESOLUTION      = "resolution"       # RCA  -> coalition, RAA
 
     ALL: list[str]   # populated below

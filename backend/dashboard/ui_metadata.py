@@ -82,7 +82,7 @@ VIZ_TOPIC_RECIPIENTS = {
     Topic.ALERTS:         ["ACA:1"],
     Topic.THREAT_REPORTS: ["RCA:1", "TIA:1"],
     Topic.THREAT_INTEL:   ["RCA:1"],
-    Topic.COALITION:      ["TIA:1"],
+    Topic.COALITION:      ["TIA:1", "RAA:1"],
     Topic.RESOLUTION:     ["RAA:1"],
     Topic.RESOURCE_GRANTS: [],
 }
